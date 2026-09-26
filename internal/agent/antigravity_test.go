@@ -30,6 +30,10 @@ func TestAntigravityArgsByRole(t *testing.T) {
 	if antigravityRole(Request{}) != Reviewer {
 		t.Fatal("request without schema should be a review")
 	}
+	// An explicit role wins: reviews also carry an inline schema.
+	if antigravityRole(Request{Role: Reviewer, SchemaInline: "{}"}) != Reviewer {
+		t.Fatal("explicit reviewer role must not be inferred as planner")
+	}
 }
 
 func TestAntigravityParsesEnvelope(t *testing.T) {

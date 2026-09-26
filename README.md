@@ -152,6 +152,15 @@ CLI is installed; it can fill any stage). Each stage can also set a `fallback` a
 `variant` controls reasoning effort and `subagent` selects an OpenCode agent.
 These values are preselected in the dashboard's model picker.
 
+Any of them can plan, including `opencode` and `antigravity`. Planning is
+read-only: OpenCode plans with its built-in `plan` agent unless the planner's
+`subagent` names another, and Antigravity runs in `--mode plan`.
+
+Every run saves its approved plan as `plan.md` in the run directory (shown by
+`kor status <run-id>`), in the same format `@plan.md` accepts. The executor and
+reviewer receive that markdown plan. To change a plan without replanning, edit
+`plan.md`, then resume from Execute; kor tells you it is using your edited plan.
+
 Without `--config`, kor uses the first file found in this order:
 
 1. `<repo>/kor.yaml`

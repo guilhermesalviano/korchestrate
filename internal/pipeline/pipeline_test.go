@@ -589,3 +589,102 @@ func TestResumeRebuildsDeletedWorktree(t *testing.T) {
 		t.Fatalf("state=%s commit=%q, want a committed done run", retry.Run.State, retry.Run.Commit)
 	}
 }
+
+// Any installed adapter can plan; the executor gets the plan as markdown.
+func TestPlannerCanBeOpencodeOrAntigravity(t *testing.T) {
+	for _, plannerName := range []string{"opencode", "antigravity"} {
+		t.Run(plannerName, func(t *testing.T) {
+			repo := setupRepo(t)
+			cfg := baseConfig(t, repo)
+			cfg.Models.Planner = config.ModelSpec{Agent: plannerName, Model: "m"}
+			cfg.Models.Reviewer.Agent = "claude"
+			var planReq agent.Request
+			var execPrompt string
+			factory := func(name string) (agent.Agent, error) {
+				return fakeAgent{name, agent.Executor, func(_ context.Context, r agent.Request) (*agent.Result, error) {
+					switch r.Role {
+					case agent.Planner:
+						planReq = r
+						return &agent.Result{Structured: planJSON(t)}, nil
+					case agent.Executor:
+						execPrompt = r.Prompt
+						return &agent.Result{}, os.WriteFile(filepath.Join(r.Dir, "feature.txt"), []byte("ok\n"), 0o644)
+					default:
+						return &agent.Result{Structured: json.RawMessage(`{"verdict":"pass","summary":"ok"}`)}, nil
+					}
+				}}, nil
+			}
+			p := &Pipeline{Cfg: cfg, Opts: Options{Repo: repo, Prompt: "add feature", Name: "plan-" + plannerName}, Gate: &recordingGate{}, AgentFactory: factory}
+			if err := p.Execute(context.Background()); err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			if planReq.Role != agent.Planner || planReq.SchemaInline == "" {
+				t.Fatalf("planner request: %+v", planReq)
+			}
+			if plannerName == "opencode" && planReq.Agent != "plan" {
+				t.Fatalf("opencode must plan with its read-only agent, got %q", planReq.Agent)
+			}
+			md, err := p.Run.Read("plan.md")
+			if err != nil || !strings.Contains(string(md), "1. write feature.txt") {
+				t.Fatalf("plan.md: %v\n%s", err, md)
+			}
+			for _, want := range []string{p.Run.Path("plan.md"), "1. write feature.txt", "Acceptance criteria", "- feature.txt exists"} {
+				if !strings.Contains(execPrompt, want) {
+					t.Fatalf("executor prompt missing %q:\n%s", want, execPrompt)
+				}
+			}
+			if strings.Contains(execPrompt, `"acceptance_criteria"`) {
+				t.Fatal("executor should get the markdown plan, not JSON")
+			}
+		})
+	}
+}
+
+func TestResumeUsesEditedPlanMarkdown(t *testing.T) {
+	repo := setupRepo(t)
+	cfg := baseConfig(t, repo)
+	var execPrompts []string
+	factory := func(name string) (agent.Agent, error) {
+		return fakeAgent{name, agent.Executor, func(_ context.Context, r agent.Request) (*agent.Result, error) {
+			switch r.Role {
+			case agent.Planner:
+				return &agent.Result{Structured: planJSON(t)}, nil
+			case agent.Executor:
+				execPrompts = append(execPrompts, r.Prompt)
+				return &agent.Result{}, os.WriteFile(filepath.Join(r.Dir, "feature.txt"), []byte(strings.Repeat("x", len(execPrompts))), 0o644)
+			default:
+				return &agent.Result{Structured: json.RawMessage(`{"verdict":"pass","summary":"ok"}`)}, nil
+			}
+		}}, nil
+	}
+	gate := &recordingGate{}
+	p := &Pipeline{Cfg: cfg, Opts: Options{Repo: repo, Prompt: "add feature", Name: "edit-plan"}, Gate: gate, AgentFactory: factory}
+	if err := p.Execute(context.Background()); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	// An untouched plan.md resumes with the exact recorded plan.
+	if plan, edited, err := loadRunPlan(p.Run); err != nil || edited || plan.Summary != "add feature" {
+		t.Fatalf("unedited plan: %+v %v %v", plan, edited, err)
+	}
+	edited := "# Plan\n\n## Summary\n\nAdd feature, differently\n\n## Steps\n\n1. write feature.txt with a greeting\n\n## Acceptance criteria\n\n- feature.txt greets\n"
+	if err := p.Run.Write("plan.md", []byte(edited)); err != nil {
+		t.Fatal(err)
+	}
+	retry := &Pipeline{Cfg: cfg, Run: p.Run, Opts: Options{Repo: repo, Prompt: "add feature", From: agent.Executor}, Gate: gate, AgentFactory: factory}
+	if err := retry.Execute(context.Background()); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	last := execPrompts[len(execPrompts)-1]
+	if !strings.Contains(last, "write feature.txt with a greeting") || !strings.Contains(last, "feature.txt greets") {
+		t.Fatalf("resume ignored the edited plan.md:\n%s", last)
+	}
+	if !strings.Contains(strings.Join(gate.infos, "\n"), "using your edited plan.md") {
+		t.Fatalf("missing notice: %v", gate.infos)
+	}
+	var saved contracts.Plan
+	data, _ := p.Run.Read("plan.json")
+	if json.Unmarshal(data, &saved) != nil || saved.Summary != "Add feature, differently" {
+		t.Fatalf("plan.json not updated from plan.md: %s", data)
+	}
+}
