@@ -386,7 +386,11 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 			p.Gate.Info("pushed " + p.branch + " to origin")
 		}
 	}
-	if p.Opts.Autopilot && run.Pushed {
+	// A pull request needs a branch of its own; changes made directly on the
+	// default branch are pushed but never proposed as a PR.
+	if p.Opts.Autopilot && run.Pushed && !worktree.SeparateBranch(p.worktreePath, p.branch) {
+		p.Gate.Info("autopilot: not opening a pull request: " + p.branch + " is the default branch; name a separate branch to get one")
+	} else if p.Opts.Autopilot && run.Pushed {
 		p.Gate.Info("autopilot: opening a pull request")
 		url, err := openPR(ctx, p.worktreePath, p.branch, prTitle(message), prBody(run, plan))
 		if err != nil {

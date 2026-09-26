@@ -855,7 +855,7 @@ func (a *App) renderFooter(w int) string {
 func (a *App) modeLine(avail int) string {
 	mode := textStyle.Render("default") + mutedStyle.Render(" · asks before each step")
 	if a.autopilot {
-		mode = cyanStyle.Bold(true).Render("autopilot") + mutedStyle.Render(" · no questions; commits, pushes and opens a PR")
+		mode = cyanStyle.Bold(true).Render("autopilot") + mutedStyle.Render(" · no questions; commits, pushes and opens a PR from a separate branch")
 	}
 	return truncate("  "+faintStyle.Render("mode:")+" "+mode+"  "+keyHint("ctrl+a", "switch"), avail)
 }

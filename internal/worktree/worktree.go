@@ -150,6 +150,28 @@ func CurrentBranch(repo string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// DefaultBranch returns the branch pull requests target: origin's HEAD when
+// known, else "main" or "master" if one exists, else "".
+func DefaultBranch(repo string) string {
+	if out, err := git(repo, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil {
+		if _, branch, ok := strings.Cut(strings.TrimSpace(out), "/"); ok && branch != "" {
+			return branch
+		}
+	}
+	for _, name := range []string{"main", "master"} {
+		if BranchExists(repo, name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// SeparateBranch reports whether branch can be the head of a pull request:
+// a named branch other than the default branch.
+func SeparateBranch(repo, branch string) bool {
+	return branch != "" && branch != "HEAD" && branch != DefaultBranch(repo)
+}
+
 // ValidBranch reports whether name can be used as a new branch name. An empty
 // name is rejected; callers that allow a derived default handle that case
 // before calling this.

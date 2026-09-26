@@ -233,3 +233,30 @@ func TestPRTitleIsCommitSubject(t *testing.T) {
 		t.Fatalf("title = %q", got)
 	}
 }
+
+func TestAutopilotOnDefaultBranchPushesWithoutPR(t *testing.T) {
+	repo := setupRepo(t)
+	withOrigin(t, repo)
+	cfg := baseConfig(t, repo)
+	gate := &silentGate{t: t}
+	factory, _ := autopilotFactory(t, "pass")
+	stubPR(t, func(_, branch, _, _ string) (string, error) {
+		t.Errorf("opened a pull request from the default branch %q", branch)
+		return "", nil
+	})
+
+	// A blank name works in the current checkout, which is on main.
+	p := &Pipeline{Cfg: cfg, Opts: Options{Repo: repo, Prompt: "add feature", Autopilot: true}, Gate: gate, AgentFactory: factory}
+	if err := p.Execute(context.Background()); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !p.Run.InPlace || p.Run.Branch != "main" || !p.Run.Pushed || p.Run.PR != "" {
+		t.Fatalf("run in_place=%v branch=%q pushed=%v pr=%q", p.Run.InPlace, p.Run.Branch, p.Run.Pushed, p.Run.PR)
+	}
+	if !strings.Contains(strings.Join(gate.infos, "\n"), "main is the default branch") {
+		t.Fatalf("missing explanation: %v", gate.infos)
+	}
+	if msg := EndMessage(p.Run); !strings.Contains(msg, "no PR: main is the default branch") {
+		t.Fatalf("end message: %q", msg)
+	}
+}

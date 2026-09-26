@@ -49,8 +49,10 @@ Each run starts in one of two modes, shown under the prompt and switched with
   and whether to commit, push or leave the changes staged.
 - **autopilot** never asks. It approves the plan, sends failed reviews back to
   the executor (up to `max_iterations`), falls back to another agent on
-  failure, then commits, pushes and opens a pull request with `gh`. It ends
-  with a message summarizing the commit, push and PR link, or why it stopped.
+  failure, then commits, pushes and opens a pull request with `gh`. The pull
+  request is only opened when the run is on a separate branch; a run on the
+  default branch (for example, a blank name while `main` is checked out) is
+  pushed without one. It ends with a message summarizing the commit, push and PR link, or why it stopped.
   Autopilot runs are badged `AUTOPILOT`; `t` retries a stopped one in the same mode.
 
 The Support tab is a terminal for the selected run: press `enter` or `!`, type a

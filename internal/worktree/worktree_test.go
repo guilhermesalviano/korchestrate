@@ -220,3 +220,22 @@ func TestList(t *testing.T) {
 		t.Fatalf("unexpected linked worktree: %+v", list[1])
 	}
 }
+
+func TestDefaultAndSeparateBranch(t *testing.T) {
+	repo := setupRepo(t)
+	if got := DefaultBranch(repo); got != "main" {
+		t.Fatalf("DefaultBranch without origin = %q, want main", got)
+	}
+	// origin/HEAD wins over the local fallback.
+	gitRun(t, repo, "branch", "trunk")
+	gitRun(t, repo, "update-ref", "refs/remotes/origin/trunk", "HEAD")
+	gitRun(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+	if got := DefaultBranch(repo); got != "trunk" {
+		t.Fatalf("DefaultBranch = %q, want trunk", got)
+	}
+	for branch, want := range map[string]bool{"trunk": false, "main": true, "feature": true, "": false, "HEAD": false} {
+		if got := SeparateBranch(repo, branch); got != want {
+			t.Errorf("SeparateBranch(%q) = %v, want %v", branch, got, want)
+		}
+	}
+}

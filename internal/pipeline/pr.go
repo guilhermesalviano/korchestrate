@@ -10,6 +10,7 @@ import (
 
 	"github.com/guilhermesalviano/korchestrate/internal/artifact"
 	"github.com/guilhermesalviano/korchestrate/internal/contracts"
+	"github.com/guilhermesalviano/korchestrate/internal/worktree"
 )
 
 const prTimeout = 2 * time.Minute
@@ -100,6 +101,8 @@ func EndMessage(run *artifact.Run) string {
 		parts = append(parts, "push failed (press p to retry)")
 	case run.PR != "":
 		parts = append(parts, "pushed", "PR "+run.PR)
+	case !worktree.SeparateBranch(run.Worktree, run.Branch):
+		parts = append(parts, "pushed", "no PR: "+run.Branch+" is the default branch")
 	default:
 		parts = append(parts, "pushed", "no PR opened")
 	}
