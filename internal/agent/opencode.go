@@ -10,7 +10,8 @@ import (
 	"github.com/guilhermesalviano/korchestrate/internal/contracts"
 )
 
-// OpenCode adapts the `opencode run` CLI. It is used as the reviewer.
+// OpenCode adapts the `opencode run` CLI. It reviews by default and can also
+// plan; both roles run with a read-only opencode agent chosen by the pipeline.
 type OpenCode struct{}
 
 func (OpenCode) Name() string { return "opencode" }
@@ -41,14 +42,15 @@ func (c OpenCode) Run(ctx context.Context, r Request) (*Result, error) {
 	args = append(args, r.ExtraArgs...)
 	args = append(args, prompt)
 
-	r.Observe.Status(Reviewer, "opencode review started ("+r.Model+")")
+	kind := r.roleOr(Reviewer)
+	r.Observe.Status(kind, "opencode "+string(kind)+" started ("+r.Model+")")
 	proc := Exec(ctx, ProcSpec{
 		Bin:     "opencode",
 		Args:    args,
 		Dir:     r.Dir,
 		Env:     r.Env,
 		Timeout: r.Timeout,
-		OnLine:  lineObserver(r.Observe, Reviewer),
+		OnLine:  lineObserver(r.Observe, kind),
 	})
 
 	res := &Result{
@@ -102,13 +104,13 @@ func (c OpenCode) Run(ctx context.Context, r Request) (*Result, error) {
 		// JSONL event output must not be scanned: its first event object
 		// would be mistaken for the verdict.
 		if len(res.Events) > 0 {
-			return res, fmt.Errorf("opencode: no JSON verdict in output: %w", err)
+			return res, fmt.Errorf("opencode: no JSON result in output: %w", err)
 		}
 		if raw2, err2 := contracts.PickJSONObject(proc.Stdout, schema); err2 == nil {
 			res.Structured = raw2
 			return res, nil
 		}
-		return res, fmt.Errorf("opencode: no JSON verdict in output: %w", err)
+		return res, fmt.Errorf("opencode: no JSON result in output: %w", err)
 	}
 	res.Structured = raw
 	return res, nil

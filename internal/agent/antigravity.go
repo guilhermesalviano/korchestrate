@@ -87,9 +87,12 @@ func (c Antigravity) Run(ctx context.Context, r Request) (*Result, error) {
 	return res, nil
 }
 
-// antigravityRole infers the pipeline role from the request shape.
+// antigravityRole uses the requested role, else infers it from the request
+// shape.
 func antigravityRole(r Request) Kind {
 	switch {
+	case r.Role != "":
+		return r.Role
 	case r.SchemaInline != "":
 		return Planner
 	case r.SchemaFile != "":

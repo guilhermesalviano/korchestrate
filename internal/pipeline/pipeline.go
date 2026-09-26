@@ -252,15 +252,14 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 	var plan *contracts.Plan
 	resumed := !created && (p.Opts.From == agent.Executor || p.Opts.From == agent.Reviewer)
 	if resumed && p.Opts.Plan == nil {
-		data, rerr := run.Read("plan.json")
-		if rerr != nil {
-			return fmt.Errorf("cannot resume at %s without the run's plan: %w", p.Opts.From, rerr)
+		saved, edited, lerr := loadRunPlan(run)
+		if lerr != nil {
+			return fmt.Errorf("cannot resume at %s without the run's plan: %w", p.Opts.From, lerr)
 		}
-		var saved contracts.Plan
-		if err := json.Unmarshal(data, &saved); err != nil {
-			return fmt.Errorf("decode plan.json: %w", err)
+		if edited {
+			p.Gate.Info("using your edited plan.md")
 		}
-		p.Opts.Plan = &saved
+		p.Opts.Plan = saved
 	}
 	if resumed {
 		plan = p.Opts.Plan
@@ -277,6 +276,8 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 	p.processControls()
 	planJSON, _ := json.MarshalIndent(plan, "", "  ")
 	_ = run.Write("plan.json", planJSON)
+	// plan.md is the executor's copy; editing it before a resume changes the plan.
+	_ = run.Write("plan.md", []byte(plan.Markdown()))
 	if err := run.SetState(artifact.StateGatePlan); err != nil {
 		return err
 	}
@@ -611,4 +612,26 @@ func shortSHA(sha string) string {
 		return sha[:12]
 	}
 	return sha
+}
+
+// loadRunPlan returns a run's recorded plan. plan.json is exact, so it wins
+// unless plan.md was edited since it was written; edited reports that case.
+func loadRunPlan(run *artifact.Run) (plan *contracts.Plan, edited bool, err error) {
+	data, err := run.Read("plan.json")
+	if err != nil {
+		return nil, false, err
+	}
+	var saved contracts.Plan
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return nil, false, fmt.Errorf("decode plan.json: %w", err)
+	}
+	md, err := run.Read("plan.md")
+	if err != nil || string(md) == saved.Markdown() {
+		return &saved, false, nil
+	}
+	fromMD, err := contracts.PlanFromMarkdown(run.Path("plan.md"), md)
+	if err != nil {
+		return nil, false, err
+	}
+	return fromMD, true, nil
 }

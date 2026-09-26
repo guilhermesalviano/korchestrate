@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -63,11 +62,13 @@ func (p *Pipeline) plan(ctx context.Context) (*contracts.Plan, error) {
 		spec := p.Cfg.Models.Planner
 		res, err := p.runStage(ctx, agent.Planner, func(a agent.Agent, model string) (*agent.Result, error) {
 			return a.Run(ctx, agent.Request{
+				Role:         agent.Planner,
 				Dir:          p.worktreePath,
 				Prompt:       base + correction,
 				System:       p.Cfg.Prompts.Resolved().Planner,
 				Model:        model,
 				Variant:      spec.Variant,
+				Agent:        plannerSubAgent(a.Name(), spec.SubAgent),
 				ExtraArgs:    spec.ExtraArgs,
 				SchemaInline: contracts.PlanSchema,
 				BudgetUSD:    p.Cfg.PlannerBudgetUSD,
@@ -119,8 +120,9 @@ func (p *Pipeline) execute(ctx context.Context, plan *contracts.Plan, iter int, 
 	spec := p.Cfg.Models.Executor
 	res, err := p.runStage(ctx, agent.Executor, func(a agent.Agent, model string) (*agent.Result, error) {
 		return a.Run(ctx, agent.Request{
+			Role:         agent.Executor,
 			Dir:          p.worktreePath,
-			Prompt:       renderExecutor(p.Opts.Prompt, plan, iter, fix),
+			Prompt:       renderExecutor(p.Opts.Prompt, plan, p.Run.Path("plan.md"), iter, fix),
 			System:       p.Cfg.Prompts.Resolved().Executor,
 			Model:        model,
 			Variant:      spec.Variant,
@@ -173,6 +175,7 @@ func (p *Pipeline) review(ctx context.Context, plan *contracts.Plan, diff string
 			tag := fmt.Sprintf("%d.%d.%s", iter, attempt, a.Name())
 			outFile := p.Run.Path("reviewer.last." + tag + ".txt")
 			res, err := a.Run(ctx, agent.Request{
+				Role:         agent.Reviewer,
 				Dir:          p.worktreePath,
 				Prompt:       base + correction,
 				System:       p.Cfg.Prompts.Resolved().Reviewer,
@@ -235,15 +238,21 @@ func capDiff(s string) string {
 	return s[:maxDiffBytes] + "\n\n[diff truncated by orchestrator]\n"
 }
 
-func renderExecutor(request string, plan *contracts.Plan, iter int, fix string) string {
-	planJSON, _ := json.MarshalIndent(plan, "", "  ")
+// plannerSubAgent keeps opencode read-only while planning: its default agent
+// can edit files, so "plan" is used unless the config names another.
+func plannerSubAgent(adapter, configured string) string {
+	if configured == "" && adapter == "opencode" {
+		return "plan"
+	}
+	return configured
+}
+
+// renderExecutor hands the executor the approved plan as markdown, the same
+// document saved as plan.md in the run directory.
+func renderExecutor(request string, plan *contracts.Plan, planFile string, iter int, fix string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Original request\n%s\n\n", request)
-	fmt.Fprintf(&b, "## Approved plan (JSON)\n%s\n\n", planJSON)
-	b.WriteString("## Acceptance criteria\n")
-	for _, c := range plan.AcceptanceCriteria {
-		fmt.Fprintf(&b, "- %s\n", c)
-	}
+	fmt.Fprintf(&b, "## Approved plan (also saved at %s)\n\n%s\n", planFile, demoteHeadings(plan.Markdown()))
 	if strings.TrimSpace(fix) != "" {
 		fmt.Fprintf(&b, "\n## Fix required (iteration %d)\nThe reviewer found these issues; fix them and nothing else:\n%s\n", iter, fix)
 	}
@@ -252,15 +261,23 @@ func renderExecutor(request string, plan *contracts.Plan, iter int, fix string) 
 }
 
 func renderReviewer(request string, plan *contracts.Plan, diff string) string {
-	planJSON, _ := json.MarshalIndent(plan, "", "  ")
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Original request\n%s\n\n", request)
-	fmt.Fprintf(&b, "## Approved plan (JSON)\n%s\n\n", planJSON)
-	b.WriteString("## Acceptance criteria to verify\n")
-	for _, c := range plan.AcceptanceCriteria {
-		fmt.Fprintf(&b, "- %s\n", c)
-	}
+	fmt.Fprintf(&b, "## Approved plan\n\n%s\n", demoteHeadings(plan.Markdown()))
+	b.WriteString("Verify every item under Acceptance criteria.\n")
 	fmt.Fprintf(&b, "\n## Diff under review\n```diff\n%s\n```\n", capDiff(diff))
 	b.WriteString("\nInspect the worktree as needed, then return ONLY the JSON review object.")
 	return b.String()
+}
+
+// demoteHeadings nests a markdown document under the prompt's own "##"
+// sections.
+func demoteHeadings(md string) string {
+	lines := strings.Split(md, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "#") {
+			lines[i] = "##" + line
+		}
+	}
+	return strings.Join(lines, "\n")
 }

@@ -46,6 +46,9 @@ func (o Observer) Status(k Kind, msg string) {
 
 // Request describes a single agent invocation.
 type Request struct {
+	// Role is the pipeline stage being served; adapters that can fill
+	// several roles use it for their mode and progress labels.
+	Role   Kind
 	Dir    string
 	Prompt string
 	System string
@@ -76,6 +79,14 @@ func (r Request) promptWithSystem() string {
 		return r.Prompt
 	}
 	return r.System + "\n\n" + r.Prompt
+}
+
+// roleOr returns the requested role, or def when the caller did not set one.
+func (r Request) roleOr(def Kind) Kind {
+	if r.Role != "" {
+		return r.Role
+	}
+	return def
 }
 
 // Result is the normalized outcome of an agent invocation.

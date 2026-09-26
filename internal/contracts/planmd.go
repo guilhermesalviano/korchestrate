@@ -441,3 +441,39 @@ func looksLikePath(s string) bool {
 	}
 	return strings.ContainsAny(s, "./")
 }
+
+// Markdown renders the plan as a document PlanFromMarkdown reads back, so the
+// saved plan.md can be handed to the executor or edited before resuming.
+func (p *Plan) Markdown() string {
+	var b strings.Builder
+	b.WriteString("# Implementation plan\n\n## Summary\n\n")
+	b.WriteString(strings.TrimSpace(p.Summary) + "\n")
+	list := func(title string, items []string) {
+		if len(items) == 0 {
+			return
+		}
+		fmt.Fprintf(&b, "\n## %s\n\n", title)
+		for _, item := range items {
+			fmt.Fprintf(&b, "- %s\n", strings.TrimSpace(item))
+		}
+	}
+	list("Assumptions", p.Assumptions)
+	files := make([]string, len(p.Files))
+	for i, f := range p.Files {
+		files[i] = "`" + f + "`"
+	}
+	list("Files", files)
+	b.WriteString("\n## Steps\n\n")
+	for i, s := range p.Steps {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, strings.TrimSpace(s.Description))
+		if len(s.Files) > 0 {
+			fmt.Fprintf(&b, "   - Files: `%s`\n", strings.Join(s.Files, "`, `"))
+		}
+		if v := strings.TrimSpace(s.Verification); v != "" {
+			fmt.Fprintf(&b, "   - Check: %s\n", v)
+		}
+	}
+	list("Acceptance criteria", p.AcceptanceCriteria)
+	list("Out of scope", p.OutOfScope)
+	return b.String()
+}
