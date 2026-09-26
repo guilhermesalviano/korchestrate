@@ -98,6 +98,13 @@ The link contains a randomly generated access token; keep it private. Access is
 over HTTP, intended for a trusted LAN. The token changes each time the server
 starts. No cloud service or frontend build is needed.
 
+You can also press `w` in the terminal dashboard to start the web server on
+`0.0.0.0:8787` without leaving it; the LAN link appears above the key hints.
+Press `w` again to stop it (twice if a browser-started run is active, since
+stopping cancels it). Quitting the dashboard also stops the server. Runs
+started from the browser don't appear in the terminal's run list until you
+reopen the dashboard.
+
 The responsive dashboard starts runs, shows live activity, plans, reviews and
 diffs, and lets you approve or reject decisions, request fixes, select a fallback
 agent, retry a failed step, and choose to commit, commit and push, or leave changes

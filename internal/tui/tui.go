@@ -68,6 +68,9 @@ type App struct {
 	// given stage and must call Session.Finish when done.
 	OnRetry func(s *Session, run *artifact.Run, from agent.Kind, choices models.Choices)
 
+	// StartWeb serves the web dashboard, toggled with "w"; nil disables it.
+	StartWeb func() (WebServer, error)
+
 	cfg         *config.Config
 	entries     []*Entry
 	cursor      int
@@ -108,6 +111,10 @@ type App struct {
 	confirmDel  *Entry // run awaiting a delete confirmation
 	notice      string // one-shot footer message, cleared by the next key
 	help        bool   // key-hint cheatsheet overlay, toggled with "h"
+
+	web         WebServer // running web dashboard, nil when off
+	webStopping bool
+	confirmWeb  bool // a second "w" cancels the active browser run
 
 	// discard tears down a finished run's worktree, branch and artifacts.
 	discard func(*artifact.Run) (warn, err error)
@@ -784,6 +791,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return a.handleKey(t)
+	case webStoppedMsg:
+		a.webStopped(t)
 	case publishResultMsg:
 		a.mutate(t.entry, func(e *Entry) {
 			e.publishing = false
@@ -889,10 +898,15 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if msg.String() != "w" {
+		a.confirmWeb = false
+	}
 	switch msg.String() {
 	case "h":
 		a.help = true
 		return a, nil
+	case "w":
+		return a, a.toggleWeb()
 	case "ctrl+a":
 		a.autopilot = !a.autopilot
 		a.notice = "new runs start in " + modeName(a.autopilot) + " mode"
@@ -1135,8 +1149,12 @@ func (a *App) removeEntry(e *Entry) {
 	}
 }
 
+// liveCount includes the web dashboard's run, which quitting also cancels.
 func (a *App) liveCount() int {
 	n := 0
+	if a.web != nil && a.web.Active() {
+		n++
+	}
 	for _, e := range a.entries {
 		if e.Live {
 			n++

@@ -19,6 +19,72 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const defaultWebListen = "0.0.0.0:8787"
+
+// webServer is a running dashboard server shared by `kor web` and the TUI.
+type webServer struct {
+	app    *web.Server
+	server *http.Server
+	links  []string // access links, token included
+	Done   chan error
+}
+
+// startWeb serves the web dashboard on listen until Stop is called or ctx ends.
+func startWeb(ctx context.Context, cfg *config.Config, configPath, listen string, allowDirty bool) (*webServer, error) {
+	token, err := web.NewToken()
+	if err != nil {
+		return nil, err
+	}
+	app, err := web.New(ctx, cfg, pipeline.Options{AllowDirty: allowDirty}, token)
+	if err != nil {
+		return nil, err
+	}
+	app.PlanFromPrompt = func(prompt string) (*contracts.Plan, string, error) { return planFiles(prompt, nil) }
+	app.LoadRunConfig = func(run *artifact.Run) (*config.Config, error) { return loadRunConfig(run, configPath) }
+	listener, err := net.Listen("tcp", listen)
+	if err != nil {
+		_ = app.Shutdown(context.Background())
+		return nil, err
+	}
+	ws := &webServer{
+		app:    app,
+		server: &http.Server{Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10},
+		Done:   make(chan error, 1),
+	}
+	for _, base := range browserURLs(listener.Addr()) {
+		ws.links = append(ws.links, base+"/#token="+token)
+	}
+	go func() {
+		err := ws.server.Serve(listener)
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		ws.Done <- err
+	}()
+	return ws, nil
+}
+
+// Links returns the access links with the token; the LAN link is last.
+func (ws *webServer) Links() []string { return ws.links }
+
+// Active reports whether a browser-started run is in flight.
+func (ws *webServer) Active() bool { return ws.app.Active() }
+
+// Stop closes the listener, then cancels agents and waits for them to exit.
+func (ws *webServer) Stop(ctx context.Context) error {
+	shutdown, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := ws.server.Shutdown(shutdown); err != nil {
+		_ = ws.server.Close()
+	}
+	cleanup, cancelCleanup := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelCleanup()
+	if err := ws.app.Shutdown(cleanup); err != nil {
+		return fmt.Errorf("waiting for agents to stop: %w", err)
+	}
+	return nil
+}
+
 func newWebCmd(configPath, repo, artifactsDir *string) *cobra.Command {
 	var listen string
 	var allowDirty bool
@@ -29,55 +95,29 @@ func newWebCmd(configPath, repo, artifactsDir *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			token, err := web.NewToken()
-			if err != nil {
-				return err
-			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			app, err := web.New(ctx, cfg, pipeline.Options{AllowDirty: allowDirty}, token)
+			ws, err := startWeb(ctx, cfg, *configPath, listen, allowDirty)
 			if err != nil {
 				return err
 			}
-			app.PlanFromPrompt = func(prompt string) (*contracts.Plan, string, error) { return planFiles(prompt, nil) }
-			app.LoadRunConfig = func(run *artifact.Run) (*config.Config, error) { return loadRunConfig(run, *configPath) }
-			defer func() {
-				cleanup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				if err := app.Shutdown(cleanup); err != nil {
-					fmt.Fprintln(cmd.ErrOrStderr(), "kor: waiting for agents to stop:", err)
-				}
-			}()
-			listener, err := net.Listen("tcp", listen)
-			if err != nil {
-				return err
-			}
-			server := &http.Server{Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 			fmt.Fprintln(cmd.OutOrStdout(), "kor web —", cfg.Repo)
-			for _, base := range browserURLs(listener.Addr()) {
-				fmt.Fprintln(cmd.OutOrStdout(), "  "+base+"/#token="+token)
+			for _, link := range ws.links {
+				fmt.Fprintln(cmd.OutOrStdout(), "  "+link)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "Open a LAN link on your phone while connected to the same Wi-Fi. Keep this access link private; it controls agents on this computer.\nLeave this command running. Ctrl+C stops the server and its active run.")
-			done := make(chan error, 1)
-			go func() { done <- server.Serve(listener) }()
+			var serveErr error
 			select {
 			case <-ctx.Done():
-				shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if err := server.Shutdown(shutdown); err != nil {
-					_ = server.Close()
-					return err
-				}
-				return nil
-			case err := <-done:
-				if errors.Is(err, http.ErrServerClosed) {
-					return nil
-				}
-				return err
+			case serveErr = <-ws.Done:
 			}
+			if err := ws.Stop(context.Background()); err != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), "kor:", err)
+			}
+			return serveErr
 		},
 	}
-	cmd.Flags().StringVar(&listen, "listen", "0.0.0.0:8787", "listen address (use 127.0.0.1:8787 for this computer only)")
+	cmd.Flags().StringVar(&listen, "listen", defaultWebListen, "listen address (use 127.0.0.1:8787 for this computer only)")
 	cmd.Flags().BoolVar(&allowDirty, "allow-dirty", false, "allow runs in a repository with uncommitted changes")
 	return cmd
 }

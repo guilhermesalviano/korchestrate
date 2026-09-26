@@ -90,6 +90,18 @@ func New(ctx context.Context, cfg *config.Config, opts pipeline.Options, token s
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.handler.ServeHTTP(w, r) }
 
+// Active reports whether a browser-started run is still in flight.
+func (s *Server) Active() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.sessions {
+		if existing.view(false).Active {
+			return true
+		}
+	}
+	return false
+}
+
 // Shutdown cancels agents and gates; callers can bound how long cleanup takes.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.Lock()

@@ -266,9 +266,19 @@ func launchDashboard(ctx context.Context, cfg *config.Config, template pipeline.
 		}()
 	}
 
+	app.StartWeb = func() (tui.WebServer, error) {
+		return startWeb(runCtx, cfg, "", defaultWebListen, template.AllowDirty)
+	}
+
 	prog := tea.NewProgram(app, tea.WithAltScreen())
 	app.Attach(prog)
 	_, runErr := prog.Run()
+
+	if ws := app.Web(); ws != nil {
+		if err := ws.Stop(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr, "kor: web dashboard:", err)
+		}
+	}
 
 	mu.Lock()
 	closed = true

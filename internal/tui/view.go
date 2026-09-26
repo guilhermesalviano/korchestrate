@@ -834,10 +834,16 @@ func (a *App) renderFooter(w int) string {
 		if a.notice != "" {
 			lines = wrap(amberStyle.Render("⚠ "+a.notice), max(1, w-2))
 		}
+		if web := a.webLine(w); web != "" {
+			lines = append([]string{web}, lines...)
+		}
 		if !a.inputFocus && e != nil {
 			return strings.Join(lines, "\n")
 		}
 		return box + "\n" + strings.Join(lines, "\n")
+	}
+	if web := a.webLine(w); web != "" {
+		box += "\n" + web
 	}
 	if a.notice != "" {
 		return box + "\n" + truncate(" "+amberStyle.Render("⚠ "+a.notice), w)
@@ -864,7 +870,11 @@ func (a *App) renderFullFooter(w int) string {
 		return truncate(" "+amberStyle.Render("⚠ "+a.notice), w)
 	}
 	hints := []string{keyHint("o", "exit full view"), keyHint("n", "new run"), keyHint("h", "keys")}
-	return truncate(" "+strings.Join(hints, mutedStyle.Render("  ·  ")), w)
+	footer := truncate(" "+strings.Join(hints, mutedStyle.Render("  ·  ")), w)
+	if web := a.webLine(w); web != "" {
+		footer = web + "\n" + footer
+	}
+	return footer
 }
 
 // packHints wraps whole controls so their key and label stay together.

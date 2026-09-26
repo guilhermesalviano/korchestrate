@@ -67,6 +67,7 @@ var helpGroups = []helpGroup{
 	}},
 	{"GENERAL", []helpKey{
 		{"h", "this help"},
+		{"w", "start / stop web dashboard"},
 		{"q / ctrl+c", "quit"},
 	}},
 }
