@@ -75,11 +75,48 @@ retry that step without restarting earlier stages, or choose another agent.
 | --- | --- |
 | `kor run [prompt]` | plan, execute and review a prompt end to end (`--autopilot` to skip every confirmation and open a PR) |
 | `kor` / `kor dashboard` | open the TUI dashboard |
+| `kor web` | open a browser dashboard, accessible from a phone on the same LAN |
 | `kor resume` | resume a previous run |
 | `kor list` | list runs |
 | `kor status` | show status of a run |
 | `kor clean` | remove worktrees and artifacts |
 | `kor doctor` | check agents, config and repo health |
+
+## Web dashboard / phone access
+
+Run this on the computer with your repository and agent CLIs:
+
+```sh
+kor web
+# Or without installing:
+go run ./cmd/kor web
+```
+
+Keep the command running and open the printed LAN link (for example,
+`http://192.168.1.20:8787/#token=…`) on your phone, connected to the same Wi-Fi.
+The link contains a randomly generated access token; keep it private. Access is
+over HTTP, intended for a trusted LAN. The token changes each time the server
+starts. No cloud service or frontend build is needed.
+
+The responsive dashboard starts runs, shows live activity, plans, reviews and
+diffs, and lets you approve or reject decisions, request fixes, select a fallback
+agent, retry a failed step, and choose to commit, commit and push, or leave changes
+staged. Autopilot is available when starting a run. It uses the same agent/model
+configuration as the terminal dashboard. Saved runs for this repository can be
+inspected and resumed from Plan, Execute or Review.
+
+One run can be active at a time in the web server. Closing the browser or locking
+your phone does not stop it; reopening the link restores the active run and its
+pending decisions. **Stop run** cancels the run while preserving its checkout and
+edits. Ctrl+C stops the server and cancels its active run. After a server restart,
+unfinished runs can be resumed explicitly from their saved history.
+
+Use `kor web --allow-dirty` to permit starting with uncommitted changes,
+`kor --repo /path/to/repo web` to select another repository, or
+`kor web --listen 127.0.0.1:8787` for access only from the host computer.
+The default is `0.0.0.0:8787`; `--listen 0.0.0.0:9000` changes the port. If the
+phone cannot connect, allow the port through your host firewall and check that
+your Wi-Fi does not isolate devices (as guest networks often do).
 
 ## Configuration
 

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#101514" />
+    <title>kor · dashboard</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/"
+        >k<span>o</span>r<span class="brand-label"> / orchestrate</span></a
+      ><span id="connection" role="status">Connecting…</span>
+    </header>
+    <div id="error" role="alert" hidden></div>
+    <section id="login" class="login panel" hidden>
+      <p class="eyebrow">YOUR LOCAL WORKSPACE</p>
+      <h1>Connect to kor.</h1>
+      <p>
+        Open the access link printed by <code>kor web</code> on your computer,
+        or paste its token below.
+      </p>
+      <form id="login-form">
+        <label for="token">Access token</label
+        ><input id="token" type="password" required autocomplete="off" /><button
+          class="primary"
+          type="submit"
+        >
+          Connect
+        </button>
+      </form>
+    </section>
+    <div id="app" class="layout" hidden>
+      <aside class="sidebar">
+        <div class="sidebar-heading">
+          <h2>Workspace</h2>
+          <button id="new-run" class="primary">+ New run</button>
+        </div>
+        <p id="repo" class="repo"></p>
+        <div class="section-label">
+          RUN HISTORY <span id="run-count">0</span>
+        </div>
+        <nav id="runs" aria-label="Runs"></nav>
+        <p class="sidebar-note">
+          Agents run on your computer.<br />You stay in control from here.
+        </p>
+      </aside>
+      <main>
+        <section id="compose" class="panel">
+          <p class="eyebrow">FROM IDEA TO IMPLEMENTATION</p>
+          <h1>What are we building?</h1>
+          <p class="muted">
+            Plan, execute, and review a change in your repository.
+          </p>
+          <form id="start-form">
+            <label for="prompt">Your request</label
+            ><textarea
+              id="prompt"
+              rows="4"
+              maxlength="50000"
+              placeholder="Describe a feature, a fix, or the next thing to improve…"
+              required
+            ></textarea>
+            <label for="branch"
+              >Branch <span class="muted">optional</span></label
+            ><input
+              id="branch"
+              placeholder="Blank uses your current checkout"
+              maxlength="200"
+              autocomplete="off"
+            />
+            <div class="model-grid" id="models"></div>
+            <label class="check"
+              ><input id="autopilot" type="checkbox" /><span
+                >Autopilot
+                <small
+                  >Automatically approve, commit, push, and open a pull
+                  request.</small
+                ></span
+              ></label
+            >
+            <div class="form-actions">
+              <span id="busy-note" class="muted"></span
+              ><button id="start" class="primary" type="submit">
+                Start run →
+              </button>
+            </div>
+          </form>
+        </section>
+        <section id="detail" hidden>
+          <div class="run-heading">
+            <div>
+              <p class="eyebrow">RUN OVERVIEW</p>
+              <h1 id="run-title"></h1>
+            </div>
+            <button id="cancel" class="danger" hidden>Stop run</button>
+          </div>
+          <p id="run-status" class="status" role="status"></p>
+          <div class="pipeline" aria-label="Pipeline stages">
+            <div data-stage="planner"><span>01</span> Plan</div>
+            <div data-stage="executor"><span>02</span> Execute</div>
+            <div data-stage="reviewer"><span>03</span> Review</div>
+          </div>
+          <p id="run-meta" class="muted meta"></p>
+          <p id="run-error" class="run-error" hidden></p>
+          <section
+            id="gate"
+            class="panel gate"
+            aria-label="Pending decision"
+            hidden
+          >
+            <p class="eyebrow">YOUR INPUT IS NEEDED</p>
+            <h2 id="gate-title"></h2>
+            <pre id="gate-body"></pre>
+            <div id="gate-actions" class="actions"></div>
+          </section>
+          <section class="panel output-panel">
+            <nav id="tabs" class="tabs" aria-label="Run output">
+              <button data-tab="logs" aria-pressed="true">Activity</button
+              ><button data-tab="plan" aria-pressed="false">Plan</button
+              ><button data-tab="review" aria-pressed="false">Review</button
+              ><button data-tab="diff" aria-pressed="false">Diff</button>
+            </nav>
+            <pre id="output" tabindex="0" aria-label="Run output"></pre>
+            <div class="output-footer">
+              <span id="output-note">Updates automatically</span
+              ><label class="check"
+                ><input id="follow" type="checkbox" checked /> Follow
+                output</label
+              >
+            </div>
+          </section>
+          <form id="resume-form" class="resume" hidden>
+            <label for="resume-stage">Resume from</label
+            ><select id="resume-stage">
+              <option value="planner">Plan</option>
+              <option value="executor">Execute</option>
+              <option value="reviewer">Review</option></select
+            ><button id="resume" type="submit">Resume run</button>
+          </form>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

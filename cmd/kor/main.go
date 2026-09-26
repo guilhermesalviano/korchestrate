@@ -44,6 +44,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newRunCmd(&configPath, &repo, &artifactsDir),
 		newDashboardCmd(&configPath, &repo, &artifactsDir),
+		newWebCmd(&configPath, &repo, &artifactsDir),
 		newResumeCmd(&configPath, &artifactsDir),
 		newListCmd(&artifactsDir),
 		newStatusCmd(&artifactsDir),
