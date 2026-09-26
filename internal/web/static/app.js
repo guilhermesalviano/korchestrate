@@ -18,6 +18,9 @@ let gateKey = "",
   connectionFailed = false;
 let defaultPrompts = {},
   promptRun = "";
+let catalog = null,
+  catalogLoading = false,
+  modelRun = "";
 let worktreesAt = 0,
   worktreesLoading = false;
 const promptStages = {
@@ -104,6 +107,123 @@ function readPrompts(prefix) {
   );
 }
 
+// catalog lists installed providers with their models and efforts; until it
+// loads, pickers offer only the configured choices.
+function catalogAgent(agent) {
+  return catalog?.agents.find((info) => info.agent === agent);
+}
+function catalogModel(agent, model) {
+  return catalogAgent(agent)?.models.find((info) => info.id === model);
+}
+function fillSelect(select, values, value, labels = {}) {
+  // A configured value missing from the catalog stays selectable.
+  if (value && !values.includes(value)) values = [value, ...values];
+  select.replaceChildren(
+    ...values.map((v) => {
+      const option = element("option", labels[v] ?? v);
+      option.value = v;
+      return option;
+    }),
+  );
+  select.value = value;
+}
+
+function modelPicker(prefix, choices, readOnly = false) {
+  $(prefix + "-models").replaceChildren(
+    ...Object.entries(promptStages).map(([stage, title]) => {
+      const choice = choices[stage] || {};
+      const box = document.createElement("div");
+      const selects = {};
+      for (const [field, label] of [
+        ["agent", "provider"],
+        ["model", "model"],
+        ["variant", "effort"],
+      ]) {
+        const select = document.createElement("select");
+        select.id = prefix + "-model-" + stage + "-" + field;
+        select.disabled = readOnly;
+        select.setAttribute("aria-label", title + " " + label);
+        selects[field] = select;
+      }
+      const fillEfforts = (variant) => {
+        const efforts =
+          catalogModel(selects.agent.value, selects.model.value)?.efforts || [];
+        fillSelect(selects.variant, ["", ...efforts], variant, {
+          "": "default effort",
+        });
+        selects.variant.hidden = efforts.length === 0 && !variant;
+      };
+      const fillModels = (model, variant) => {
+        const ids =
+          catalogAgent(selects.agent.value)?.models.map((info) => info.id) ||
+          [];
+        fillSelect(selects.model, ids, model || ids[0] || "");
+        // A newly picked model starts at its default effort.
+        fillEfforts(
+          variant ??
+            (catalogModel(selects.agent.value, selects.model.value)
+              ?.default_effort ||
+              ""),
+        );
+      };
+      fillSelect(
+        selects.agent,
+        catalog ? catalog.agents.map((info) => info.agent) : [],
+        choice.agent || "",
+      );
+      fillModels(choice.model, choice.variant || "");
+      selects.agent.addEventListener("change", () => fillModels("", null));
+      selects.model.addEventListener("change", () =>
+        fillEfforts(
+          catalogModel(selects.agent.value, selects.model.value)
+            ?.default_effort || "",
+        ),
+      );
+      box.append(
+        element("small", title + " · " + stage),
+        selects.agent,
+        selects.model,
+        selects.variant,
+      );
+      return box;
+    }),
+  );
+}
+
+function readModels(prefix) {
+  return Object.fromEntries(
+    Object.keys(promptStages).map((stage) => [
+      stage,
+      Object.fromEntries(
+        ["agent", "model", "variant"].map((field) => [
+          field,
+          $(prefix + "-model-" + stage + "-" + field).value,
+        ]),
+      ),
+    ]),
+  );
+}
+
+// Discovery probes the agent CLIs, so it loads once after connecting and
+// refreshes the pickers in place, keeping what the user already chose.
+async function loadCatalog() {
+  if (catalog || catalogLoading) return;
+  catalogLoading = true;
+  try {
+    const loaded = await api("/models");
+    const newChoices = readModels("new");
+    catalog = loaded;
+    modelPicker("new", newChoices);
+    if (current?.models && modelRun) {
+      modelPicker("run", readModels("run"), current.active);
+    }
+  } catch (err) {
+    message("Could not list models: " + err.message);
+  } finally {
+    catalogLoading = false;
+  }
+}
+
 async function connect() {
   try {
     const config = await api("/config");
@@ -118,13 +238,9 @@ async function connect() {
     defaultPrompts = config.default_prompts;
     promptEditor("new", config.prompts);
     promptRun = "";
-    $("models").replaceChildren(
-      ...Object.entries(config.models).map(([stage, model]) => {
-        const box = document.createElement("div");
-        box.append(element("small", stage), element("p", model));
-        return box;
-      }),
-    );
+    modelPicker("new", config.models);
+    modelRun = "";
+    loadCatalog();
     message();
     connection("Connected to host", true);
     await refresh();
@@ -328,6 +444,24 @@ function renderDetail(run) {
   }
   $("resume-form").hidden = run.active || !meta;
   $("resume").disabled = active || sending;
+  $("run-model-panel").hidden = !run.models;
+  if (run.models) {
+    if (modelRun !== run.id) {
+      modelPicker("run", run.models, run.active);
+      modelRun = run.id;
+    }
+    $("run-models")
+      .querySelectorAll("select")
+      .forEach((select) => {
+        select.disabled = run.active;
+      });
+    setText(
+      "run-models-note",
+      run.active
+        ? "Stop the run to change its models, then resume from the step you want to rerun."
+        : "Change models before resuming. They apply from the step you select below.",
+    );
+  }
   $("run-prompt-panel").hidden = !run.prompts;
   if (run.prompts) {
     if (promptRun !== run.id) {
@@ -435,6 +569,7 @@ $("start-form").addEventListener("submit", (event) => {
       name: $("branch").value,
       autopilot: $("autopilot").checked,
       prompts: readPrompts("new"),
+      models: readModels("new"),
     });
     $("prompt").value = "";
     await select(result.id);
@@ -458,6 +593,7 @@ $("resume-form").addEventListener("submit", (event) => {
       run_id: id,
       from: $("resume-stage").value,
       prompts: readPrompts("run"),
+      models: readModels("run"),
     });
     await select(result.id);
   });

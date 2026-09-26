@@ -16,16 +16,16 @@ import (
 // (claude | codex | opencode | antigravity), Model the CLI model id and Variant the
 // reasoning effort (codex model_reasoning_effort, opencode --variant).
 type Choice struct {
-	Agent   string
-	Model   string
-	Variant string
+	Agent   string `json:"agent"`
+	Model   string `json:"model"`
+	Variant string `json:"variant"`
 }
 
 // Choices holds the selection for the three pipeline stages.
 type Choices struct {
-	Planner  Choice
-	Executor Choice
-	Reviewer Choice
+	Planner  Choice `json:"planner"`
+	Executor Choice `json:"executor"`
+	Reviewer Choice `json:"reviewer"`
 }
 
 // For returns the choice for a pipeline stage.
@@ -43,20 +43,20 @@ func (c Choices) For(k agent.Kind) Choice {
 // ModelInfo is one selectable model. Efforts is the list of reasoning efforts
 // the model accepts; empty means effort selection does not apply.
 type ModelInfo struct {
-	ID            string
-	DefaultEffort string
-	Efforts       []string
+	ID            string   `json:"id"`
+	DefaultEffort string   `json:"default_effort,omitempty"`
+	Efforts       []string `json:"efforts,omitempty"`
 }
 
 // AgentInfo is the catalog of models for one adapter.
 type AgentInfo struct {
-	Agent  string
-	Models []ModelInfo
+	Agent  string      `json:"agent"`
+	Models []ModelInfo `json:"models"`
 }
 
 // Catalog is everything discovery found, in canonical adapter order.
 type Catalog struct {
-	Agents []AgentInfo
+	Agents []AgentInfo `json:"agents"`
 }
 
 // Agent returns the catalog entry for an adapter, or nil.
@@ -118,6 +118,35 @@ func ChoicesFromConfig(cfg *config.Config) Choices {
 			Variant: cfg.Models.Reviewer.Variant,
 		},
 	}
+}
+
+// Apply returns a per-run copy of cfg with the chosen provider, model and
+// effort. A stage without a model keeps the configured one.
+func (c Choices) Apply(cfg *config.Config) *config.Config {
+	out := *cfg
+	out.Models = cfg.Models
+	if c.Planner.Model != "" {
+		if c.Planner.Agent != "" {
+			out.Models.Planner.Agent = c.Planner.Agent
+		}
+		out.Models.Planner.Model = c.Planner.Model
+		out.Models.Planner.Variant = c.Planner.Variant
+	}
+	if c.Executor.Model != "" {
+		if c.Executor.Agent != "" {
+			out.Models.Executor.Agent = c.Executor.Agent
+		}
+		out.Models.Executor.Model = c.Executor.Model
+		out.Models.Executor.Variant = c.Executor.Variant
+	}
+	if c.Reviewer.Model != "" {
+		if c.Reviewer.Agent != "" {
+			out.Models.Reviewer.Agent = c.Reviewer.Agent
+		}
+		out.Models.Reviewer.Model = c.Reviewer.Model
+		out.Models.Reviewer.Variant = c.Reviewer.Variant
+	}
+	return &out
 }
 
 // DefaultModel returns the model to preselect for an adapter: the built-in

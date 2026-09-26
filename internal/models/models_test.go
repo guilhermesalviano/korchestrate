@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/guilhermesalviano/korchestrate/internal/config"
 )
 
 func TestParseCodexCache(t *testing.T) {
@@ -128,5 +130,51 @@ func TestDiscoverIncludesAllProviders(t *testing.T) {
 	}
 	if c.DefaultModel("codex") == "" || c.DefaultModel("claude") == "" || c.DefaultModel("opencode") == "" {
 		t.Errorf("default models must resolve: %+v", c.Agents)
+	}
+}
+
+func TestChoicesApply(t *testing.T) {
+	cfg := config.Default()
+	cfg.Models.Executor.Sandbox = "workspace-write"
+	cfg.Models.Reviewer.SubAgent = "plan"
+	cfg.Loop.MaxIterations = 3
+
+	out := Choices{
+		Planner:  Choice{Agent: "codex", Model: "gpt-6-astra", Variant: "high"},
+		Executor: Choice{Agent: "codex", Model: "gpt-6-luna", Variant: "max"},
+		Reviewer: Choice{Agent: "zai", Model: "zai/glm-5.2", Variant: "highspeed"},
+	}.Apply(cfg)
+
+	if out == cfg {
+		t.Fatal("Apply must return a copy")
+	}
+	if out.Models.Planner.Agent != "codex" || out.Models.Planner.Model != "gpt-6-astra" || out.Models.Planner.Variant != "high" {
+		t.Fatalf("planner not applied: %+v", out.Models.Planner)
+	}
+	if out.Models.Executor.Model != "gpt-6-luna" || out.Models.Executor.Variant != "max" {
+		t.Fatalf("executor not applied: %+v", out.Models.Executor)
+	}
+	if out.Models.Executor.Sandbox != "workspace-write" || !out.Models.Executor.ApproveForMe {
+		t.Fatalf("executor knobs the picker does not own must be kept: %+v", out.Models.Executor)
+	}
+	if out.Models.Reviewer.SubAgent != "plan" {
+		t.Fatalf("reviewer subagent must be kept: %+v", out.Models.Reviewer)
+	}
+	if out.Loop.MaxIterations != 3 || out.Repo != cfg.Repo {
+		t.Fatal("unrelated config must be carried over")
+	}
+	// The source config is untouched.
+	if cfg.Models.Executor.Model == "gpt-6-luna" {
+		t.Fatal("Apply must not mutate the source config")
+	}
+}
+
+func TestChoicesApplyEmptyKeepsConfig(t *testing.T) {
+	cfg := config.Default()
+	out := Choices{}.Apply(cfg)
+	if out.Models.Planner.Model != cfg.Models.Planner.Model ||
+		out.Models.Executor.Model != cfg.Models.Executor.Model ||
+		out.Models.Reviewer.Model != cfg.Models.Reviewer.Model {
+		t.Fatalf("empty choices must keep the config models: %+v", out.Models)
 	}
 }

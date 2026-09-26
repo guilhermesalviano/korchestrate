@@ -233,7 +233,7 @@ func launchDashboard(ctx context.Context, cfg *config.Config, template pipeline.
 		if opts.Repo == "" {
 			opts.Repo = cfg.Repo
 		}
-		p := &pipeline.Pipeline{Cfg: applyChoices(cfg, choices), Opts: opts, Gate: s}
+		p := &pipeline.Pipeline{Cfg: choices.Apply(cfg), Opts: opts, Gate: s}
 		go func() {
 			defer wg.Done()
 			err := p.Execute(runCtx)
@@ -258,7 +258,7 @@ func launchDashboard(ctx context.Context, cfg *config.Config, template pipeline.
 		opts := template
 		opts.Repo, opts.Prompt, opts.From = run.Repo, run.Prompt, from
 		opts.Autopilot = s.Autopilot()
-		p := &pipeline.Pipeline{Cfg: applyChoices(runCfg, choices), Opts: opts, Run: run, Gate: s}
+		p := &pipeline.Pipeline{Cfg: choices.Apply(runCfg), Opts: opts, Run: run, Gate: s}
 		go func() {
 			defer wg.Done()
 			err := p.Execute(runCtx)
@@ -305,36 +305,6 @@ func waitTimeout(wg *sync.WaitGroup, d time.Duration) bool {
 	case <-time.After(d):
 		return false
 	}
-}
-
-// applyChoices returns a per-run copy of cfg with the dashboard's pre-run
-// provider/model/effort selection applied. Stage knobs the picker does not own
-// (fallback, subagent, sandbox, extra args) are kept from cfg.
-func applyChoices(cfg *config.Config, c models.Choices) *config.Config {
-	out := *cfg
-	out.Models = cfg.Models
-	if c.Planner.Model != "" {
-		if c.Planner.Agent != "" {
-			out.Models.Planner.Agent = c.Planner.Agent
-		}
-		out.Models.Planner.Model = c.Planner.Model
-		out.Models.Planner.Variant = c.Planner.Variant
-	}
-	if c.Executor.Model != "" {
-		if c.Executor.Agent != "" {
-			out.Models.Executor.Agent = c.Executor.Agent
-		}
-		out.Models.Executor.Model = c.Executor.Model
-		out.Models.Executor.Variant = c.Executor.Variant
-	}
-	if c.Reviewer.Model != "" {
-		if c.Reviewer.Agent != "" {
-			out.Models.Reviewer.Agent = c.Reviewer.Agent
-		}
-		out.Models.Reviewer.Model = c.Reviewer.Model
-		out.Models.Reviewer.Variant = c.Reviewer.Variant
-	}
-	return &out
 }
 
 func resolveConfig(configPath, repo, artifactsDir string) (*config.Config, error) {

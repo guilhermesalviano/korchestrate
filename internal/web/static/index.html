@@ -62,7 +62,8 @@
               maxlength="200"
               autocomplete="off"
             />
-            <div class="model-grid" id="models"></div>
+            <p class="field-label">Models</p>
+            <div class="model-grid" id="new-models"></div>
             <details class="prompt-editor">
               <summary>Base prompts · Plan, Execute, Review</summary>
               <p class="muted">
@@ -132,6 +133,11 @@
               >
             </div>
           </section>
+          <details id="run-model-panel" class="panel prompt-editor" hidden>
+            <summary>Models for this run</summary>
+            <p id="run-models-note" class="muted"></p>
+            <div class="model-grid" id="run-models"></div>
+          </details>
           <details id="run-prompt-panel" class="panel prompt-editor" hidden>
             <summary>Base prompts for this run</summary>
             <p id="run-prompts-note" class="muted"></p>

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -25,6 +26,7 @@ import (
 	"github.com/guilhermesalviano/korchestrate/internal/artifact"
 	"github.com/guilhermesalviano/korchestrate/internal/config"
 	"github.com/guilhermesalviano/korchestrate/internal/contracts"
+	"github.com/guilhermesalviano/korchestrate/internal/models"
 	"github.com/guilhermesalviano/korchestrate/internal/pipeline"
 	"github.com/guilhermesalviano/korchestrate/internal/ui"
 	"github.com/guilhermesalviano/korchestrate/internal/worktree"
@@ -47,6 +49,12 @@ type Server struct {
 	PlanFromPrompt func(string) (*contracts.Plan, string, error)
 	LoadRunConfig  func(*artifact.Run) (*config.Config, error)
 	execute        func(context.Context, *pipeline.Pipeline) error
+
+	// The model catalog is discovered once, on first use, since it probes
+	// the agent CLIs.
+	discover    func() *models.Catalog
+	catalogOnce sync.Once
+	catalog     *models.Catalog
 }
 
 func New(ctx context.Context, cfg *config.Config, opts pipeline.Options) (*Server, error) {
@@ -54,11 +62,12 @@ func New(ctx context.Context, cfg *config.Config, opts pipeline.Options) (*Serve
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Server{cfg: cfg, opts: opts, ctx: ctx, cancel: cancel, sessions: make(map[string]*session), execute: func(ctx context.Context, p *pipeline.Pipeline) error { return p.Execute(ctx) }}
+	s := &Server{cfg: cfg, opts: opts, ctx: ctx, cancel: cancel, sessions: make(map[string]*session), execute: func(ctx context.Context, p *pipeline.Pipeline) error { return p.Execute(ctx) }, discover: models.Discover}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/config", s.getConfig)
 	mux.HandleFunc("GET /api/runs", s.list)
 	mux.HandleFunc("GET /api/worktrees", s.worktrees)
+	mux.HandleFunc("GET /api/models", s.listModels)
 	mux.HandleFunc("POST /api/runs", s.start)
 	mux.HandleFunc("GET /api/runs/{id}", s.detail)
 	mux.HandleFunc("POST /api/runs/{id}/answer", s.answer)
@@ -206,11 +215,50 @@ func decode(w http.ResponseWriter, r *http.Request, value any) bool {
 }
 
 func (s *Server) getConfig(w http.ResponseWriter, _ *http.Request) {
-	send(w, 200, map[string]any{"repo": s.cfg.Repo, "prompts": s.cfg.Prompts.Resolved(), "default_prompts": config.DefaultPrompts(), "models": map[string]string{
-		"planner":  s.cfg.Models.Planner.Agent + " / " + s.cfg.Models.Planner.Model,
-		"executor": s.cfg.Models.Executor.Agent + " / " + s.cfg.Models.Executor.Model,
-		"reviewer": s.cfg.Models.Reviewer.Agent + " / " + s.cfg.Models.Reviewer.Model,
-	}})
+	send(w, 200, map[string]any{"repo": s.cfg.Repo, "prompts": s.cfg.Prompts.Resolved(), "default_prompts": config.DefaultPrompts(), "models": models.ChoicesFromConfig(s.cfg)})
+}
+
+// listModels lists the installed providers and the models and efforts they offer.
+func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {
+	s.catalogOnce.Do(func() { s.catalog = s.discover() })
+	installed := map[string]bool{}
+	for _, name := range models.ProviderOrder() {
+		installed[name] = true
+	}
+	agents := []models.AgentInfo{}
+	for _, info := range s.catalog.Agents {
+		// Like the TUI picker, providers without models are not offered.
+		if installed[info.Agent] && len(info.Models) > 0 {
+			agents = append(agents, info)
+		}
+	}
+	send(w, 200, models.Catalog{Agents: agents})
+}
+
+// validChoices rejects providers that are not installed and values that the
+// agent CLIs could read as flags.
+func validChoices(c models.Choices) error {
+	installed := map[string]bool{}
+	for _, name := range models.ProviderOrder() {
+		installed[name] = true
+	}
+	for _, stage := range []struct {
+		name   string
+		choice models.Choice
+	}{{"planner", c.Planner}, {"executor", c.Executor}, {"reviewer", c.Reviewer}} {
+		if !installed[stage.choice.Agent] {
+			return fmt.Errorf("%s provider %q is not installed", stage.name, stage.choice.Agent)
+		}
+		if stage.choice.Model == "" {
+			return fmt.Errorf("choose a %s model", stage.name)
+		}
+		for _, value := range []string{stage.choice.Model, stage.choice.Variant} {
+			if len(value) > 200 || strings.HasPrefix(value, "-") || strings.ContainsFunc(value, func(r rune) bool { return r < ' ' || r == 0x7f }) {
+				return fmt.Errorf("invalid %s model or effort %q", stage.name, value)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) list(w http.ResponseWriter, _ *http.Request) {
@@ -332,14 +380,14 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 			v.Review = ui.RenderReview(&review)
 		}
 		v.Diff = readArtifact(v.Run, "diff.patch")
-		if v.Prompts == nil {
+		if v.Prompts == nil || v.Models == nil {
 			cfg, err := s.runConfig(v.Run)
 			if err != nil {
-				fail(w, 500, "could not load saved prompts: "+err.Error())
+				fail(w, 500, "could not load saved run settings: "+err.Error())
 				return
 			}
-			prompts := cfg.Prompts.Resolved()
-			v.Prompts = &prompts
+			prompts, choices := cfg.Prompts.Resolved(), models.ChoicesFromConfig(cfg)
+			v.Prompts, v.Models = &prompts, &choices
 		}
 	}
 	send(w, 200, v)
@@ -367,6 +415,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 		RunID     string          `json:"run_id"`
 		From      agent.Kind      `json:"from"`
 		Prompts   *config.Prompts `json:"prompts"`
+		Models    *models.Choices `json:"models"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -413,6 +462,13 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	if req.Models != nil {
+		if err := validChoices(*req.Models); err != nil {
+			fail(w, 400, err.Error())
+			return
+		}
+		cfg = req.Models.Apply(cfg)
 	}
 	copyCfg := *cfg
 	if req.Prompts != nil {
@@ -462,8 +518,8 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	session := &session{snapshot: snapshot{ID: id, Prompt: opts.Prompt, Active: true, Status: "starting", CreatedAt: time.Now()}, cancel: cancel}
-	prompts := copyCfg.Prompts
-	session.Prompts = &prompts
+	prompts, choices := copyCfg.Prompts, models.ChoicesFromConfig(&copyCfg)
+	session.Prompts, session.Models = &prompts, &choices
 	if run != nil {
 		session.RunUpdated(*run)
 	}

@@ -320,13 +320,23 @@ textarea::placeholder {
   text-transform: uppercase;
   letter-spacing: 1px;
 }
-.model-grid p {
-  margin: 6px 0 0;
+.model-grid select {
+  margin-top: 8px;
+  padding: 8px 10px;
   font:
-    11px ui-monospace,
+    12px ui-monospace,
     monospace;
-  overflow-wrap: anywhere;
-  line-height: 1.5;
+}
+.model-grid select:disabled {
+  color: var(--muted);
+  opacity: 1;
+}
+.field-label {
+  font-size: 13px;
+  margin: 20px 0 0;
+}
+.field-label + .model-grid {
+  margin-top: 8px;
 }
 .form-actions {
   display: flex;
@@ -613,10 +623,14 @@ textarea::placeholder {
     padding: 16px;
   }
   .model-grid {
+    grid-template-columns: 1fr;
     gap: 6px;
   }
   .model-grid div {
     padding: 10px 8px;
+  }
+  .model-grid select {
+    font-size: 16px;
   }
   .form-actions {
     align-items: flex-end;

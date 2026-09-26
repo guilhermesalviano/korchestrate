@@ -19,6 +19,7 @@ import (
 	"github.com/guilhermesalviano/korchestrate/internal/artifact"
 	"github.com/guilhermesalviano/korchestrate/internal/config"
 	"github.com/guilhermesalviano/korchestrate/internal/contracts"
+	"github.com/guilhermesalviano/korchestrate/internal/models"
 	"github.com/guilhermesalviano/korchestrate/internal/pipeline"
 	"github.com/guilhermesalviano/korchestrate/internal/ui"
 )
@@ -266,8 +267,15 @@ type fakeAgent struct {
 
 // systemLog records the base prompt each fake agent received.
 type systemLog struct {
-	mu   sync.Mutex
-	seen map[string]string
+	mu     sync.Mutex
+	seen   map[string]string
+	models map[string]string
+}
+
+func (l *systemLog) model(name string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.models[name]
 }
 
 func (l *systemLog) get(name string) string {
@@ -282,6 +290,7 @@ func (f fakeAgent) Run(_ context.Context, req agent.Request) (*agent.Result, err
 	if f.systems != nil {
 		f.systems.mu.Lock()
 		f.systems.seen[f.name] = req.System
+		f.systems.models[f.name] = req.Model
 		f.systems.mu.Unlock()
 	}
 	switch f.name {
@@ -315,7 +324,7 @@ func TestRealPipelineThroughHTTPAndResume(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	systems := &systemLog{seen: map[string]string{}}
+	systems := &systemLog{seen: map[string]string{}, models: map[string]string{}}
 	s.execute = func(ctx context.Context, p *pipeline.Pipeline) error {
 		p.AgentFactory = func(name string) (agent.Agent, error) { return fakeAgent{name, systems}, nil }
 		return p.Execute(ctx)
@@ -341,7 +350,20 @@ func TestRealPipelineThroughHTTPAndResume(t *testing.T) {
 	if detail.Code != 200 || !strings.Contains(detail.Body.String(), `"planner":"custom plan"`) {
 		t.Fatalf("saved prompts missing from detail: %d %s", detail.Code, detail.Body.String())
 	}
-	id = startTest(t, s, fmt.Sprintf(`{"run_id":%q,"from":"reviewer","prompts":{"planner":"custom plan","executor":"","reviewer":"edited review"}}`, v.Run.ID))
+	if !strings.Contains(detail.Body.String(), `"models":{"planner":{"agent":"claude"`) {
+		t.Fatalf("saved models missing from detail: %s", detail.Body.String())
+	}
+	// Invalid model choices are refused before anything runs.
+	for _, models := range []string{
+		`{"planner":{"agent":"nope","model":"m"},"executor":{"agent":"codex","model":"m"},"reviewer":{"agent":"opencode","model":"m"}}`,
+		`{"planner":{"agent":"claude","model":"--danger"},"executor":{"agent":"codex","model":"m"},"reviewer":{"agent":"opencode","model":"m"}}`,
+		`{"planner":{"agent":"claude","model":""},"executor":{"agent":"codex","model":"m"},"reviewer":{"agent":"opencode","model":"m"}}`,
+	} {
+		if w := request(s, "POST", "/api/runs", fmt.Sprintf(`{"run_id":%q,"from":"reviewer","models":%s}`, v.Run.ID, models)); w.Code != 400 {
+			t.Fatalf("invalid models %s: %d %s", models, w.Code, w.Body.String())
+		}
+	}
+	id = startTest(t, s, fmt.Sprintf(`{"run_id":%q,"from":"reviewer","prompts":{"planner":"custom plan","executor":"","reviewer":"edited review"},"models":{"planner":{"agent":"claude","model":"opus","variant":""},"executor":{"agent":"codex","model":"gpt-6-sol","variant":""},"reviewer":{"agent":"opencode","model":"picked/review-model","variant":"high"}}}`, v.Run.ID))
 	for _, step := range []struct{ kind, answer string }{{"review", "approve"}, {"commit", "stop"}} {
 		v := await(t, s, id, func(v snapshot) bool { return v.Gate != nil && v.Gate.Kind == step.kind })
 		answerTest(t, s, id, v.Gate, step.answer, 200)
@@ -352,6 +374,17 @@ func TestRealPipelineThroughHTTPAndResume(t *testing.T) {
 	}
 	if systems.get("opencode") != "edited review" {
 		t.Fatalf("resume did not use edited reviewer prompt: %q", systems.get("opencode"))
+	}
+	if model := systems.model("opencode"); model != "picked/review-model" {
+		t.Fatalf("resume did not use the chosen reviewer model: %q", model)
+	}
+	// The catalog lists only installed providers that offer models.
+	s.discover = func() *models.Catalog {
+		return &models.Catalog{Agents: []models.AgentInfo{{Agent: "claude", Models: []models.ModelInfo{{ID: "opus"}}}, {Agent: "codex"}, {Agent: "not-installed", Models: []models.ModelInfo{{ID: "x"}}}}}
+	}
+	w := request(s, "GET", "/api/models", "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"agent":"claude"`) || strings.Contains(w.Body.String(), "codex") || strings.Contains(w.Body.String(), "not-installed") {
+		t.Fatalf("models: %d %s", w.Code, w.Body.String())
 	}
 }
 
