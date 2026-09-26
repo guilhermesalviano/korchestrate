@@ -69,6 +69,15 @@ type Request struct {
 	Observe   Observer
 }
 
+// promptWithSystem is used by adapters that carry base instructions in the
+// prompt argument rather than a separate system-prompt flag.
+func (r Request) promptWithSystem() string {
+	if r.System == "" {
+		return r.Prompt
+	}
+	return r.System + "\n\n" + r.Prompt
+}
+
 // Result is the normalized outcome of an agent invocation.
 type Result struct {
 	ExitCode   int

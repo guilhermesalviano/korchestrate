@@ -27,7 +27,7 @@ func (c OpenCode) Run(ctx context.Context, r Request) (*Result, error) {
 		args = append(args, "--variant", r.Variant)
 	}
 	args = append(args, r.ExtraArgs...)
-	args = append(args, r.Prompt)
+	args = append(args, r.promptWithSystem())
 
 	r.Observe.Status(Reviewer, "opencode review started ("+r.Model+")")
 	proc := Exec(ctx, ProcSpec{

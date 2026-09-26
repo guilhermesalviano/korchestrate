@@ -76,6 +76,15 @@
               autocomplete="off"
             />
             <div class="model-grid" id="models"></div>
+            <details class="prompt-editor">
+              <summary>Base prompts · Plan, Execute, Review</summary>
+              <p class="muted">
+                View or edit each agent step’s instructions. Your request, the
+                plan, and the diff are added automatically. Edits apply to this
+                run and are saved with its history.
+              </p>
+              <div id="new-prompts"></div>
+            </details>
             <label class="check"
               ><input id="autopilot" type="checkbox" /><span
                 >Autopilot
@@ -136,6 +145,11 @@
               >
             </div>
           </section>
+          <details id="run-prompt-panel" class="panel prompt-editor" hidden>
+            <summary>Base prompts for this run</summary>
+            <p id="run-prompts-note" class="muted"></p>
+            <div id="run-prompts"></div>
+          </details>
           <form id="resume-form" class="resume" hidden>
             <label for="resume-stage">Resume from</label
             ><select id="resume-stage">

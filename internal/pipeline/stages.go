@@ -65,7 +65,7 @@ func (p *Pipeline) plan(ctx context.Context) (*contracts.Plan, error) {
 			return a.Run(ctx, agent.Request{
 				Dir:          p.worktreePath,
 				Prompt:       base + correction,
-				System:       contracts.PlannerPrompt,
+				System:       p.Cfg.Prompts.Resolved().Planner,
 				Model:        model,
 				Variant:      spec.Variant,
 				ExtraArgs:    spec.ExtraArgs,
@@ -121,7 +121,7 @@ func (p *Pipeline) execute(ctx context.Context, plan *contracts.Plan, iter int, 
 		return a.Run(ctx, agent.Request{
 			Dir:          p.worktreePath,
 			Prompt:       renderExecutor(p.Opts.Prompt, plan, iter, fix),
-			System:       contracts.ExecutorPrompt,
+			System:       p.Cfg.Prompts.Resolved().Executor,
 			Model:        model,
 			Variant:      spec.Variant,
 			ExtraArgs:    spec.ExtraArgs,
@@ -166,7 +166,7 @@ func (p *Pipeline) review(ctx context.Context, plan *contracts.Plan, diff string
 			return a.Run(ctx, agent.Request{
 				Dir:       p.worktreePath,
 				Prompt:    base + correction,
-				System:    contracts.ReviewerPrompt,
+				System:    p.Cfg.Prompts.Resolved().Reviewer,
 				Model:     model,
 				Variant:   spec.Variant,
 				Agent:     spec.SubAgent,

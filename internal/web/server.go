@@ -146,7 +146,7 @@ func decode(w http.ResponseWriter, r *http.Request, value any) bool {
 		fail(w, 415, "expected application/json")
 		return false
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(value); err != nil {
@@ -161,7 +161,7 @@ func decode(w http.ResponseWriter, r *http.Request, value any) bool {
 }
 
 func (s *Server) getConfig(w http.ResponseWriter, _ *http.Request) {
-	send(w, 200, map[string]any{"repo": s.cfg.Repo, "models": map[string]string{
+	send(w, 200, map[string]any{"repo": s.cfg.Repo, "prompts": s.cfg.Prompts.Resolved(), "default_prompts": config.DefaultPrompts(), "models": map[string]string{
 		"planner":  s.cfg.Models.Planner.Agent + " / " + s.cfg.Models.Planner.Model,
 		"executor": s.cfg.Models.Executor.Agent + " / " + s.cfg.Models.Executor.Model,
 		"reviewer": s.cfg.Models.Reviewer.Agent + " / " + s.cfg.Models.Reviewer.Model,
@@ -249,6 +249,15 @@ func (s *Server) detail(w http.ResponseWriter, r *http.Request) {
 			v.Review = ui.RenderReview(&review)
 		}
 		v.Diff = readArtifact(v.Run, "diff.patch")
+		if v.Prompts == nil {
+			cfg, err := s.runConfig(v.Run)
+			if err != nil {
+				fail(w, 500, "could not load saved prompts: "+err.Error())
+				return
+			}
+			prompts := cfg.Prompts.Resolved()
+			v.Prompts = &prompts
+		}
 	}
 	send(w, 200, v)
 }
@@ -269,13 +278,18 @@ func readArtifact(run *artifact.Run, name string) string {
 
 func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Prompt    string     `json:"prompt"`
-		Name      string     `json:"name"`
-		Autopilot bool       `json:"autopilot"`
-		RunID     string     `json:"run_id"`
-		From      agent.Kind `json:"from"`
+		Prompt    string          `json:"prompt"`
+		Name      string          `json:"name"`
+		Autopilot bool            `json:"autopilot"`
+		RunID     string          `json:"run_id"`
+		From      agent.Kind      `json:"from"`
+		Prompts   *config.Prompts `json:"prompts"`
 	}
 	if !decode(w, r, &req) {
+		return
+	}
+	if len(req.Prompt) > 50000 || len(req.Name) > 200 {
+		fail(w, 400, "request or branch name is too long")
 		return
 	}
 	opts := s.opts
@@ -297,12 +311,10 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400, "choose planner, executor or reviewer")
 			return
 		}
-		if s.LoadRunConfig != nil {
-			cfg, err = s.LoadRunConfig(run)
-			if err != nil {
-				fail(w, 400, err.Error())
-				return
-			}
+		cfg, err = s.runConfig(run)
+		if err != nil {
+			fail(w, 400, err.Error())
+			return
 		}
 		opts.Prompt, opts.From, opts.Autopilot = run.Prompt, req.From, run.Autopilot
 	} else {
@@ -320,6 +332,10 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	copyCfg := *cfg
+	if req.Prompts != nil {
+		copyCfg.Prompts = *req.Prompts
+	}
+	copyCfg.Prompts = copyCfg.Prompts.Resolved()
 	copyCfg.Repo, copyCfg.ArtifactsDir = s.cfg.Repo, s.cfg.ArtifactsDir
 	if err := copyCfg.Validate(); err != nil {
 		fail(w, 400, err.Error())
@@ -363,6 +379,8 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	session := &session{snapshot: snapshot{ID: id, Prompt: opts.Prompt, Active: true, Status: "starting", CreatedAt: time.Now()}, cancel: cancel}
+	prompts := copyCfg.Prompts
+	session.Prompts = &prompts
 	if run != nil {
 		session.RunUpdated(*run)
 	}
@@ -380,6 +398,18 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 		session.finish(err, p.Run)
 	}()
 	send(w, http.StatusAccepted, map[string]string{"id": id})
+}
+
+func (s *Server) runConfig(run *artifact.Run) (*config.Config, error) {
+	if s.LoadRunConfig != nil {
+		return s.LoadRunConfig(run)
+	}
+	cfg, err := config.Load(run.Path("config.resolved.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	cfg.Repo = run.Repo
+	return cfg, nil
 }
 
 func (s *Server) answer(w http.ResponseWriter, r *http.Request) {

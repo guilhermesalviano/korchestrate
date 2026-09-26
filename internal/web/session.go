@@ -9,6 +9,7 @@ import (
 
 	"github.com/guilhermesalviano/korchestrate/internal/agent"
 	"github.com/guilhermesalviano/korchestrate/internal/artifact"
+	"github.com/guilhermesalviano/korchestrate/internal/config"
 	"github.com/guilhermesalviano/korchestrate/internal/contracts"
 	"github.com/guilhermesalviano/korchestrate/internal/ui"
 )
@@ -28,18 +29,19 @@ type gate struct {
 }
 
 type snapshot struct {
-	ID        string        `json:"id"`
-	Prompt    string        `json:"prompt"`
-	Active    bool          `json:"active"`
-	Status    string        `json:"status"`
-	Error     string        `json:"error,omitempty"`
-	CreatedAt time.Time     `json:"created_at"`
-	Run       *artifact.Run `json:"run,omitempty"`
-	Gate      *gate         `json:"gate,omitempty"`
-	Logs      []string      `json:"logs,omitempty"`
-	Plan      string        `json:"plan,omitempty"`
-	Review    string        `json:"review,omitempty"`
-	Diff      string        `json:"diff,omitempty"`
+	ID        string          `json:"id"`
+	Prompt    string          `json:"prompt"`
+	Active    bool            `json:"active"`
+	Status    string          `json:"status"`
+	Error     string          `json:"error,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+	Run       *artifact.Run   `json:"run,omitempty"`
+	Gate      *gate           `json:"gate,omitempty"`
+	Logs      []string        `json:"logs,omitempty"`
+	Plan      string          `json:"plan,omitempty"`
+	Review    string          `json:"review,omitempty"`
+	Diff      string          `json:"diff,omitempty"`
+	Prompts   *config.Prompts `json:"prompts,omitempty"`
 }
 
 // All browser state is copied under mu; the pipeline owns its mutable Run.
@@ -64,6 +66,7 @@ func (s *session) view(detail bool) snapshot {
 		v.Logs = append([]string(nil), v.Logs...)
 	} else {
 		v.Logs = nil
+		v.Prompts = nil
 	}
 	return v
 }

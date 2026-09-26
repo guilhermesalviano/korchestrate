@@ -16,6 +16,13 @@ let gateKey = "",
   sending = false,
   chooseActive = true,
   connectionFailed = false;
+let defaultPrompts = {},
+  promptRun = "";
+const promptStages = {
+  planner: "Plan",
+  executor: "Execute",
+  reviewer: "Review",
+};
 const labels = {
   logs: "Activity",
   plan: "Plan",
@@ -63,6 +70,47 @@ function setText(id, text) {
   if ($(id).textContent !== text) $(id).textContent = text;
 }
 
+function promptEditor(prefix, prompts, readOnly = false) {
+  const container = $(prefix + "-prompts");
+  container.replaceChildren(
+    ...Object.entries(promptStages).map(([stage, title]) => {
+      const section = document.createElement("details");
+      section.className = "prompt-stage";
+      const summary = element("summary", title + " · " + stage);
+      const id = prefix + "-prompt-" + stage;
+      const label = element("label", title + " base prompt");
+      label.htmlFor = id;
+      const input = document.createElement("textarea");
+      input.id = id;
+      input.rows = 12;
+      input.maxLength = 16384;
+      input.spellcheck = false;
+      input.value = prompts[stage] || "";
+      input.readOnly = readOnly;
+      const reset = element(
+        "button",
+        "Reset " + title.toLowerCase() + " to built-in prompt",
+      );
+      reset.type = "button";
+      reset.hidden = readOnly;
+      reset.addEventListener("click", () => {
+        input.value = defaultPrompts[stage];
+      });
+      section.append(summary, label, input, reset);
+      return section;
+    }),
+  );
+}
+
+function readPrompts(prefix) {
+  return Object.fromEntries(
+    Object.keys(promptStages).map((stage) => [
+      stage,
+      $(prefix + "-prompt-" + stage).value,
+    ]),
+  );
+}
+
 async function connect() {
   try {
     const config = await api("/config");
@@ -79,6 +127,9 @@ async function connect() {
     $("compose").hidden = false;
     $("detail").hidden = true;
     $("repo").textContent = config.repo;
+    defaultPrompts = config.default_prompts;
+    promptEditor("new", config.prompts);
+    promptRun = "";
     $("models").replaceChildren(
       ...Object.entries(config.models).map(([stage, model]) => {
         const box = document.createElement("div");
@@ -231,6 +282,29 @@ function renderDetail(run) {
   }
   $("resume-form").hidden = run.active || !meta;
   $("resume").disabled = active || sending;
+  $("run-prompt-panel").hidden = !run.prompts;
+  if (run.prompts) {
+    if (promptRun !== run.id) {
+      promptEditor("run", run.prompts, run.active);
+      promptRun = run.id;
+    }
+    $("run-prompts")
+      .querySelectorAll("textarea")
+      .forEach((input) => {
+        input.readOnly = run.active;
+      });
+    $("run-prompts")
+      .querySelectorAll("button")
+      .forEach((button) => {
+        button.hidden = run.active;
+      });
+    setText(
+      "run-prompts-note",
+      run.active
+        ? "These are the base instructions for this run. Stop the run to edit them, then resume from the step you want to rerun."
+        : "Edit these instructions before resuming. Changes apply from the step you select below; earlier steps are kept.",
+    );
+  }
   setText(
     "output-note",
     run.active
@@ -317,6 +391,7 @@ $("start-form").addEventListener("submit", (event) => {
       prompt: $("prompt").value,
       name: $("branch").value,
       autopilot: $("autopilot").checked,
+      prompts: readPrompts("new"),
     });
     $("prompt").value = "";
     await select(result.id);
@@ -339,6 +414,7 @@ $("resume-form").addEventListener("submit", (event) => {
     const result = await api("/runs", {
       run_id: id,
       from: $("resume-stage").value,
+      prompts: readPrompts("run"),
     });
     await select(result.id);
   });

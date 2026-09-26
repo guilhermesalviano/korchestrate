@@ -505,6 +505,47 @@ textarea::placeholder {
   margin-top: 20px;
   width: 100%;
 }
+.prompt-editor {
+  margin-top: 20px;
+}
+.prompt-editor summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding: 12px 0;
+  font-weight: 600;
+}
+.prompt-editor p {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.prompt-stage {
+  border-top: 1px solid var(--line);
+  padding: 8px 0;
+}
+.prompt-stage summary {
+  font-size: 13px;
+  color: var(--accent);
+}
+.prompt-stage textarea {
+  font:
+    13px/1.6 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  min-height: 240px;
+}
+.prompt-stage textarea:read-only {
+  color: var(--muted);
+}
+.prompt-stage button {
+  margin-top: 10px;
+  font-size: 12px;
+}
+@media (max-width: 800px) {
+  .prompt-stage textarea {
+    font-size: 16px;
+  }
+}
 @media (min-width: 1500px) {
   main {
     padding: 48px 60px;

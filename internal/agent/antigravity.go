@@ -128,12 +128,8 @@ func antigravityArgs(r Request, kind Kind) []string {
 	}
 	args = append(args, r.ExtraArgs...)
 
-	prompt := r.Prompt
-	if r.System != "" {
-		prompt = r.System + "\n\n" + prompt
-	}
 	// Attach the prompt to the flag so a leading "-" is never read as a flag.
-	return append(args, "--print="+prompt)
+	return append(args, "--print="+r.promptWithSystem())
 }
 
 // Installed reports whether an adapter's CLI can be invoked. The core

@@ -105,6 +105,20 @@ staged. Autopilot is available when starting a run. It uses the same agent/model
 configuration as the terminal dashboard. Saved runs for this repository can be
 inspected and resumed from Plan, Execute or Review.
 
+Expand **Base prompts · Plan, Execute, Review** before starting a run to view or
+edit each step’s base instructions. Each step has a reset button to restore its
+built-in prompt. The original request, plan, diff and retry feedback are added
+automatically. Prompts are saved with the run: expand **Base prompts for this
+run** to inspect them, or edit them before resuming a stopped/completed run.
+Active runs show their prompts read-only. Edits affect the selected resume step
+and later steps; they do not rerun earlier steps or change defaults for other runs.
+
+To set persistent defaults for new runs (web and terminal), add `prompts.planner`,
+`prompts.executor`, and/or `prompts.reviewer` strings to your JSON/YAML config.
+Omitted or blank prompts use the built-in instructions. Each base prompt can be
+up to 16 KiB; retain the JSON output requirements so the pipeline can read the
+agent’s result.
+
 One run can be active at a time in the web server. Closing the browser or locking
 your phone does not stop it; reopening the link restores the active run and its
 pending decisions. **Stop run** cancels the run while preserving its checkout and

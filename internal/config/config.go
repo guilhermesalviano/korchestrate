@@ -79,7 +79,8 @@ func DefaultModelFor(agent string) string {
 
 // Config is the resolved orchestrator configuration.
 type Config struct {
-	Repo string `yaml:"repo"`
+	Repo    string  `yaml:"repo"`
+	Prompts Prompts `yaml:"prompts"`
 
 	Models struct {
 		Planner  ModelSpec    `yaml:"planner"`
@@ -113,6 +114,7 @@ type Config struct {
 // Default returns the built-in configuration.
 func Default() *Config {
 	c := &Config{}
+	c.Prompts = DefaultPrompts()
 	c.Models.Planner = ModelSpec{Agent: "claude", Model: "opus", Fallback: "codex"}
 	c.Models.Executor = ExecutorSpec{
 		Agent:        "codex",
@@ -221,6 +223,9 @@ func (c *Config) applyDefaults() {
 
 // Validate checks that the configuration is internally consistent.
 func (c *Config) Validate() error {
+	if err := c.Prompts.Validate(); err != nil {
+		return err
+	}
 	if c.Repo == "" {
 		return fmt.Errorf("repo is empty")
 	}
@@ -236,4 +241,8 @@ func (c *Config) Validate() error {
 }
 
 // MarshalYAML renders the resolved config for the run artifact.
-func (c *Config) MarshalYAML() ([]byte, error) { return yaml.Marshal(c) }
+func (c *Config) MarshalYAML() ([]byte, error) {
+	resolved := *c
+	resolved.Prompts = c.Prompts.Resolved()
+	return yaml.Marshal(&resolved)
+}

@@ -18,7 +18,7 @@ func (Codex) Kind() Kind   { return Executor }
 
 func (c Codex) Run(ctx context.Context, r Request) (*Result, error) {
 	args := append(buildArgs(r), r.ExtraArgs...)
-	args = append(args, r.Prompt)
+	args = append(args, r.promptWithSystem())
 
 	r.Observe.Status(Executor, "codex exec started ("+r.Model+", sandbox="+r.Sandbox+")")
 	proc := Exec(ctx, ProcSpec{

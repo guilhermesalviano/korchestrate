@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -240,11 +241,31 @@ func TestFallbackRetryAndReviewFixControls(t *testing.T) {
 	}
 }
 
-type fakeAgent struct{ name string }
+type fakeAgent struct {
+	name    string
+	systems *systemLog
+}
+
+// systemLog records the base prompt each fake agent received.
+type systemLog struct {
+	mu   sync.Mutex
+	seen map[string]string
+}
+
+func (l *systemLog) get(name string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.seen[name]
+}
 
 func (f fakeAgent) Name() string     { return f.name }
 func (f fakeAgent) Kind() agent.Kind { return agent.Planner }
 func (f fakeAgent) Run(_ context.Context, req agent.Request) (*agent.Result, error) {
+	if f.systems != nil {
+		f.systems.mu.Lock()
+		f.systems.seen[f.name] = req.System
+		f.systems.mu.Unlock()
+	}
 	switch f.name {
 	case "claude":
 		return &agent.Result{Structured: json.RawMessage(`{"summary":"add feature","steps":[{"id":"1","description":"write feature.txt"}],"acceptance_criteria":["feature.txt exists"]}`)}, nil
@@ -276,11 +297,12 @@ func TestRealPipelineThroughHTTPAndResume(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	systems := &systemLog{seen: map[string]string{}}
 	s.execute = func(ctx context.Context, p *pipeline.Pipeline) error {
-		p.AgentFactory = func(name string) (agent.Agent, error) { return fakeAgent{name}, nil }
+		p.AgentFactory = func(name string) (agent.Agent, error) { return fakeAgent{name, systems}, nil }
 		return p.Execute(ctx)
 	}
-	id := startTest(t, s, `{"prompt":"add feature"}`)
+	id := startTest(t, s, `{"prompt":"add feature","prompts":{"planner":"custom plan","executor":"","reviewer":"custom review"}}`)
 	for _, step := range []struct{ kind, answer string }{{"plan", "approve"}, {"review", "approve"}, {"commit", "stop"}} {
 		v := await(t, s, id, func(v snapshot) bool { return v.Gate != nil && v.Gate.Kind == step.kind })
 		answerTest(t, s, id, v.Gate, step.answer, 200)
@@ -292,7 +314,16 @@ func TestRealPipelineThroughHTTPAndResume(t *testing.T) {
 	if v.Plan == "" || v.Review == "" {
 		t.Fatal("missing plan/review")
 	}
-	id = startTest(t, s, fmt.Sprintf(`{"run_id":%q,"from":"reviewer"}`, v.Run.ID))
+	// Blank prompts fall back to the built-in instructions.
+	if systems.get("claude") != "custom plan" || systems.get("codex") != contracts.ExecutorPrompt || systems.get("opencode") != "custom review" {
+		t.Fatalf("base prompts not passed to agents: %+v", systems.seen)
+	}
+	// Saved prompts are shown for the finished run and can be edited on resume.
+	detail := request(s, "GET", "/api/runs/"+v.Run.ID, "")
+	if detail.Code != 200 || !strings.Contains(detail.Body.String(), `"planner":"custom plan"`) {
+		t.Fatalf("saved prompts missing from detail: %d %s", detail.Code, detail.Body.String())
+	}
+	id = startTest(t, s, fmt.Sprintf(`{"run_id":%q,"from":"reviewer","prompts":{"planner":"custom plan","executor":"","reviewer":"edited review"}}`, v.Run.ID))
 	for _, step := range []struct{ kind, answer string }{{"review", "approve"}, {"commit", "stop"}} {
 		v := await(t, s, id, func(v snapshot) bool { return v.Gate != nil && v.Gate.Kind == step.kind })
 		answerTest(t, s, id, v.Gate, step.answer, 200)
@@ -300,5 +331,8 @@ func TestRealPipelineThroughHTTPAndResume(t *testing.T) {
 	v = await(t, s, id, func(v snapshot) bool { return !v.Active })
 	if v.Error != "" {
 		t.Fatal(v.Error)
+	}
+	if systems.get("opencode") != "edited review" {
+		t.Fatalf("resume did not use edited reviewer prompt: %q", systems.get("opencode"))
 	}
 }
