@@ -93,10 +93,12 @@ go run ./cmd/kor web
 ```
 
 Keep the command running and open the printed LAN link (for example,
-`http://192.168.1.20:8787/#token=…`) on your phone, connected to the same Wi-Fi.
-The link contains a randomly generated access token; keep it private. Access is
-over HTTP, intended for a trusted LAN. The token changes each time the server
-starts. No cloud service or frontend build is needed.
+`http://192.168.1.20:8787/`) on your phone, connected to the same Wi-Fi. There
+is no token: the server only accepts this computer and private LAN addresses
+(`10.x`, `172.16–31.x`, `192.168.x`, link-local and IPv6 ULA), and only when
+opened by IP address or `localhost`. Anyone on that network can control agents
+on this computer, so use it only on a network you trust, not public or guest
+Wi-Fi. Access is over HTTP. No cloud service or frontend build is needed.
 
 You can also press `w` in the terminal dashboard to start the web server on
 `0.0.0.0:8787` without leaving it; the LAN link appears above the key hints.

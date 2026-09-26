@@ -4,15 +4,15 @@ package web
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -35,7 +35,6 @@ var assets embed.FS
 
 type Server struct {
 	cfg      *config.Config
-	token    string
 	opts     pipeline.Options
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -50,23 +49,12 @@ type Server struct {
 	execute        func(context.Context, *pipeline.Pipeline) error
 }
 
-func NewToken() (string, error) {
-	b := make([]byte, 24)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
-}
-
-func New(ctx context.Context, cfg *config.Config, opts pipeline.Options, token string) (*Server, error) {
-	if len(token) < 24 {
-		return nil, fmt.Errorf("web access token must have at least 24 characters")
-	}
+func New(ctx context.Context, cfg *config.Config, opts pipeline.Options) (*Server, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Server{cfg: cfg, token: token, opts: opts, ctx: ctx, cancel: cancel, sessions: make(map[string]*session), execute: func(ctx context.Context, p *pipeline.Pipeline) error { return p.Execute(ctx) }}
+	s := &Server{cfg: cfg, opts: opts, ctx: ctx, cancel: cancel, sessions: make(map[string]*session), execute: func(ctx context.Context, p *pipeline.Pipeline) error { return p.Execute(ctx) }}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/config", s.getConfig)
 	mux.HandleFunc("GET /api/runs", s.list)
@@ -120,17 +108,32 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 }
 
+func newID() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// secure limits the dashboard to this computer and the private LAN. There is no
+// token, so it also rejects DNS-rebound host names and cross-origin API calls,
+// which would otherwise let any web page drive the agents.
 func (s *Server) secure(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		if !localClient(r.RemoteAddr) {
+			fail(w, http.StatusForbidden, "kor web only accepts connections from this computer or your local network")
+			return
+		}
+		if !localHost(r.Host) {
+			fail(w, http.StatusForbidden, "open kor web by its IP address, as printed by kor web")
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/") {
-			if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.token)) != 1 {
-				fail(w, http.StatusUnauthorized, "Open the access link printed by kor web, or enter its token.")
-				return
-			}
 			if origin := r.Header.Get("Origin"); origin != "" {
 				u, err := url.Parse(origin)
 				scheme := "http"
@@ -145,6 +148,34 @@ func (s *Server) secure(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// localClient reports whether addr is loopback or a private LAN address.
+func localClient(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	ip = ip.Unmap()
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
+// localHost accepts only IP literals and localhost, so a public name that is
+// rebound to a LAN address cannot reach the API from a browser.
+func localHost(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	_, err := netip.ParseAddr(host)
+	return err == nil
 }
 
 func send(w http.ResponseWriter, status int, value any) {
@@ -393,7 +424,7 @@ func (s *Server) start(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err.Error())
 		return
 	}
-	id, err := NewToken()
+	id, err := newID()
 	if err != nil {
 		fail(w, 500, err.Error())
 		return

@@ -500,20 +500,6 @@ textarea::placeholder {
 .run-error {
   border-radius: 8px;
 }
-.login {
-  max-width: 480px;
-  margin: 8vh auto;
-  padding: 32px;
-}
-.login p:not(.eyebrow) {
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.6;
-}
-.login button {
-  margin-top: 20px;
-  width: 100%;
-}
 .prompt-editor {
   margin-top: 20px;
 }
@@ -625,10 +611,6 @@ textarea::placeholder {
   }
   #output {
     padding: 16px;
-  }
-  .login {
-    margin: 36px 20px;
-    max-width: none;
   }
   .model-grid {
     gap: 6px;

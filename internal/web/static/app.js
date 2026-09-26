@@ -1,10 +1,10 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
-let token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
-try {
-  token = token || sessionStorage.getItem("kor-token") || "";
-} catch (_) {}
+// Old access links carried a token in the hash; it is no longer used.
 if (location.hash) history.replaceState(null, "", location.pathname);
+try {
+  sessionStorage.removeItem("kor-token");
+} catch (_) {}
 let selected = "",
   current = null,
   tab = "logs",
@@ -43,21 +43,12 @@ function connection(text, ok = false) {
 async function api(path, body) {
   const response = await fetch("/api" + path, {
     method: body === undefined ? "GET" : "POST",
-    headers: {
-      Authorization: "Bearer " + token,
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-    },
+    headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: "no-store",
     signal: AbortSignal.timeout(15000),
   });
   const data = await response.json();
-  if (response.status === 401) {
-    connected = false;
-    $("login").hidden = false;
-    $("app").hidden = true;
-    connection("Access required");
-  }
   if (!response.ok)
     throw new Error(data.error || "Request failed (" + response.status + ")");
   return data;
@@ -116,15 +107,10 @@ function readPrompts(prefix) {
 async function connect() {
   try {
     const config = await api("/config");
-    try {
-      sessionStorage.setItem("kor-token", token);
-    } catch (_) {}
-    $("token").value = "";
     connected = true;
     chooseActive = true;
     selected = "";
     current = null;
-    $("login").hidden = true;
     $("app").hidden = false;
     $("compose").hidden = false;
     $("detail").hidden = true;
@@ -144,8 +130,8 @@ async function connect() {
     await refresh();
   } catch (err) {
     message(err.message);
-    connection("Unable to connect");
-    $("login").hidden = false;
+    connection("Unable to connect · retrying");
+    setTimeout(connect, 3000);
   }
 }
 
@@ -433,11 +419,6 @@ async function action(fn) {
     await refresh();
   }
 }
-$("login-form").addEventListener("submit", (event) => {
-  event.preventDefault();
-  token = $("token").value.trim();
-  connect();
-});
 $("new-run").addEventListener("click", () => {
   selected = "";
   current = null;
@@ -493,18 +474,7 @@ $("tabs").addEventListener("click", (event) => {
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
 });
-window.addEventListener("hashchange", () => {
-  const accessToken = new URLSearchParams(location.hash.slice(1)).get("token");
-  if (!accessToken) return;
-  token = accessToken;
-  history.replaceState(null, "", location.pathname);
-  connect();
-});
 setInterval(() => {
   if (!document.hidden) refresh();
 }, 1200);
-if (token) connect();
-else {
-  $("login").hidden = false;
-  connection("Access required");
-}
+connect();

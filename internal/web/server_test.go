@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -22,13 +23,19 @@ import (
 	"github.com/guilhermesalviano/korchestrate/internal/ui"
 )
 
-const testToken = "0123456789abcdef0123456789abcdef"
+// localRequest builds a request from a LAN client, as a phone would send.
+func localRequest(method, path, body string) *http.Request {
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.RemoteAddr = "192.168.1.30:51000"
+	r.Host = "192.168.1.20:8787"
+	return r
+}
 
 func testServer(t *testing.T) *Server {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Repo, cfg.ArtifactsDir = t.TempDir(), t.TempDir()
-	s, err := New(context.Background(), cfg, pipeline.Options{}, testToken)
+	s, err := New(context.Background(), cfg, pipeline.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,8 +50,7 @@ func testServer(t *testing.T) *Server {
 }
 
 func request(s *Server, method, path, body string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(method, path, strings.NewReader(body))
-	r.Header.Set("Authorization", "Bearer "+testToken)
+	r := localRequest(method, path, body)
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
@@ -90,28 +96,40 @@ func answerTest(t *testing.T, s *Server, id string, g *gate, value string, statu
 	}
 }
 
-func TestAuthenticationAndOrigin(t *testing.T) {
+func TestLocalNetworkOnly(t *testing.T) {
 	s := testServer(t)
 	for _, test := range []struct {
-		path, token, origin string
-		status              int
+		path, remote, host, origin string
+		status                     int
 	}{
-		{"/", "", "", 200}, {"/app.js", "", "", 200}, {"/style.css", "", "", 200},
-		{"/api/runs", "", "", 401}, {"/api/config", "bad-token", "", 401},
-		{"/api/runs", testToken, "http://evil.test", 403},
-		{"/api/runs", testToken, "https://example.com", 403},
-		{"/api/runs", testToken, "http://example.com", 200},
+		{"/", "", "", "", 200}, {"/app.js", "", "", "", 200}, {"/api/runs", "", "", "", 200},
+		{"/api/runs", "127.0.0.1:5000", "127.0.0.1:8787", "", 200},
+		{"/api/runs", "[::1]:5000", "localhost:8787", "", 200},
+		{"/api/runs", "10.0.0.8:5000", "", "", 200},
+		{"/api/runs", "[fe80::1]:5000", "[fe80::2]:8787", "", 200},
+		{"/api/runs", "[::ffff:192.168.1.30]:5000", "", "", 200},
+		// Public clients are refused, even for the static page.
+		{"/", "203.0.113.9:5000", "", "", 403},
+		{"/api/runs", "8.8.8.8:5000", "", "", 403},
+		// A DNS name rebound to a LAN address must not reach the API.
+		{"/api/runs", "", "evil.test:8787", "", 403},
+		{"/", "", "evil.test", "", 403},
+		{"/api/runs", "", "", "http://evil.test", 403},
+		{"/api/runs", "", "", "https://192.168.1.20:8787", 403},
+		{"/api/runs", "", "", "http://192.168.1.20:8787", 200},
 	} {
-		r := httptest.NewRequest("GET", test.path, nil)
-		r.Header.Set("Authorization", "Bearer "+test.token)
+		r := localRequest("GET", test.path, "")
+		if test.remote != "" {
+			r.RemoteAddr = test.remote
+		}
+		if test.host != "" {
+			r.Host = test.host
+		}
 		r.Header.Set("Origin", test.origin)
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, r)
 		if w.Code != test.status {
 			t.Errorf("%+v: got %d", test, w.Code)
-		}
-		if strings.Contains(w.Body.String(), testToken) {
-			t.Error("token leaked into response")
 		}
 		if w.Header().Get("Content-Security-Policy") == "" {
 			t.Error("missing CSP")

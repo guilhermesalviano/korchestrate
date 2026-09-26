@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,17 +26,13 @@ const defaultWebListen = "0.0.0.0:8787"
 type webServer struct {
 	app    *web.Server
 	server *http.Server
-	links  []string // access links, token included
+	links  []string // dashboard links, loopback first
 	Done   chan error
 }
 
 // startWeb serves the web dashboard on listen until Stop is called or ctx ends.
 func startWeb(ctx context.Context, cfg *config.Config, configPath, listen string, allowDirty bool) (*webServer, error) {
-	token, err := web.NewToken()
-	if err != nil {
-		return nil, err
-	}
-	app, err := web.New(ctx, cfg, pipeline.Options{AllowDirty: allowDirty}, token)
+	app, err := web.New(ctx, cfg, pipeline.Options{AllowDirty: allowDirty})
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +49,7 @@ func startWeb(ctx context.Context, cfg *config.Config, configPath, listen string
 		Done:   make(chan error, 1),
 	}
 	for _, base := range browserURLs(listener.Addr()) {
-		ws.links = append(ws.links, base+"/#token="+token)
+		ws.links = append(ws.links, base+"/")
 	}
 	go func() {
 		err := ws.server.Serve(listener)
@@ -64,7 +61,7 @@ func startWeb(ctx context.Context, cfg *config.Config, configPath, listen string
 	return ws, nil
 }
 
-// Links returns the access links with the token; the LAN link is last.
+// Links returns the dashboard links; the LAN link is last.
 func (ws *webServer) Links() []string { return ws.links }
 
 // Active reports whether a browser-started run is in flight.
@@ -105,7 +102,7 @@ func newWebCmd(configPath, repo, artifactsDir *string) *cobra.Command {
 			for _, link := range ws.links {
 				fmt.Fprintln(cmd.OutOrStdout(), "  "+link)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Open a LAN link on your phone while connected to the same Wi-Fi. Keep this access link private; it controls agents on this computer.\nLeave this command running. Ctrl+C stops the server and its active run.")
+			fmt.Fprintln(cmd.OutOrStdout(), "Open the LAN link on your phone while connected to the same Wi-Fi. Only this computer and devices on your local network can connect, with no token, so anyone on that network can control agents here.\nLeave this command running. Ctrl+C stops the server and its active run.")
 			var serveErr error
 			select {
 			case <-ctx.Done():
@@ -122,6 +119,11 @@ func newWebCmd(configPath, repo, artifactsDir *string) *cobra.Command {
 	return cmd
 }
 
+// virtualInterfaces are container and VM bridges a phone cannot reach.
+var virtualInterfaces = []string{"docker", "br-", "veth", "virbr", "vmnet", "vboxnet", "cni", "flannel", "podman", "lxc", "lxd"}
+
+// browserURLs lists the dashboard links: loopback first and the LAN address
+// used for the default route last, since that is the one to open on a phone.
 func browserURLs(addr net.Addr) []string {
 	host, port, err := net.SplitHostPort(addr.String())
 	if err != nil {
@@ -132,13 +134,46 @@ func browserURLs(addr net.Addr) []string {
 		return []string{"http://" + net.JoinHostPort(host, port)}
 	}
 	urls := []string{"http://" + net.JoinHostPort("127.0.0.1", port)}
-	addresses, _ := net.InterfaceAddrs()
-	for _, address := range addresses {
-		network, ok := address.(*net.IPNet)
-		if !ok || network.IP.IsLoopback() || network.IP.To4() == nil {
+	primary := primaryIP()
+	interfaces, _ := net.Interfaces()
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || isVirtual(iface.Name) {
 			continue
 		}
-		urls = append(urls, "http://"+net.JoinHostPort(network.IP.String(), port))
+		addresses, _ := iface.Addrs()
+		for _, address := range addresses {
+			network, ok := address.(*net.IPNet)
+			if !ok || network.IP.To4() == nil || !network.IP.IsPrivate() || network.IP.Equal(primary) {
+				continue
+			}
+			urls = append(urls, "http://"+net.JoinHostPort(network.IP.String(), port))
+		}
+	}
+	if primary != nil && primary.IsPrivate() {
+		urls = append(urls, "http://"+net.JoinHostPort(primary.String(), port))
 	}
 	return urls
+}
+
+func isVirtual(name string) bool {
+	for _, prefix := range virtualInterfaces {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// primaryIP returns the local address of the default route. Connecting a UDP
+// socket only selects a route; no packet is sent.
+func primaryIP() net.IP {
+	conn, err := net.Dial("udp4", "192.0.2.1:9")
+	if err != nil {
+		return nil
+	}
+	defer conn.Close()
+	if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+		return addr.IP
+	}
+	return nil
 }

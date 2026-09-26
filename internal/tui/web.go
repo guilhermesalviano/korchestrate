@@ -9,7 +9,7 @@ import (
 
 // WebServer is a web dashboard started from the TUI with "w".
 type WebServer interface {
-	// Links returns the access links, token included; the LAN link is last.
+	// Links returns the dashboard links; the LAN link is last.
 	Links() []string
 	// Active reports whether a browser-started run is in flight.
 	Active() bool
@@ -40,7 +40,7 @@ func (a *App) toggleWeb() tea.Cmd {
 			return nil
 		}
 		a.web = ws
-		a.notice = "web dashboard on · keep the link private; it controls agents on this computer"
+		a.notice = "web dashboard on · anyone on your local network can use it to control agents here"
 	case a.web.Active() && !confirm:
 		a.confirmWeb = true
 		a.notice = "a browser run is active; press w again to cancel it and stop the web dashboard"
