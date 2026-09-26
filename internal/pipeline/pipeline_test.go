@@ -234,7 +234,7 @@ func TestExecutorFallsBackOnFailure(t *testing.T) {
 			}}, nil
 		case "opencode":
 			return fakeAgent{"opencode", agent.Executor, func(_ context.Context, r agent.Request) (*agent.Result, error) {
-				if r.OutFile == "" {
+				if !strings.Contains(r.OutFile, "executor.last") {
 					return &agent.Result{Structured: json.RawMessage(`{"verdict":"pass","summary":"ok"}`)}, nil
 				}
 				opencodeExecRuns++

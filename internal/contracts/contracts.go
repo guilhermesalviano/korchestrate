@@ -156,6 +156,79 @@ func ExtractJSON(text string) (json.RawMessage, error) {
 	return nil, errors.New("no valid JSON object found in output")
 }
 
+// ExtractJSONObjects returns every balanced, valid JSON object found in text,
+// in order of appearance. Unlike ExtractJSON it does not stop at the first
+// match, so callers can pick the object that satisfies their contract when the
+// agent quotes other JSON (file contents, examples) alongside its answer.
+func ExtractJSONObjects(text string) []json.RawMessage {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	var out []json.RawMessage
+	for start := strings.IndexByte(text, '{'); start >= 0; {
+		if end, ok := matchObject(text, start); ok {
+			candidate := text[start:end]
+			if json.Valid([]byte(candidate)) {
+				out = append(out, json.RawMessage(candidate))
+			}
+		}
+		next := strings.IndexByte(text[start+1:], '{')
+		if next < 0 {
+			break
+		}
+		start = start + 1 + next
+	}
+	return out
+}
+
+// RequiredKeys returns the top-level required property names declared by a JSON
+// schema, or nil when the schema declares none.
+func RequiredKeys(schema string) []string {
+	var s struct {
+		Required []string `json:"required"`
+	}
+	if json.Unmarshal([]byte(schema), &s) != nil {
+		return nil
+	}
+	return s.Required
+}
+
+// HasKeys reports whether raw is a JSON object containing every given key.
+func HasKeys(raw json.RawMessage, keys []string) bool {
+	if len(keys) == 0 {
+		return false
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return false
+	}
+	for _, k := range keys {
+		if _, ok := obj[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// PickJSONObject chooses the balanced JSON object most likely to be an agent's
+// structured answer. A candidate satisfying the schema's required keys wins
+// (the last such candidate, so an example followed by the real answer picks the
+// answer); otherwise the last object in the text is returned.
+func PickJSONObject(text, schema string) (json.RawMessage, error) {
+	candidates := ExtractJSONObjects(text)
+	if len(candidates) == 0 {
+		return nil, errors.New("no valid JSON object found in output")
+	}
+	required := RequiredKeys(schema)
+	for i := len(candidates) - 1; i >= 0; i-- {
+		if HasKeys(candidates[i], required) {
+			return candidates[i], nil
+		}
+	}
+	return candidates[len(candidates)-1], nil
+}
+
 func matchObject(s string, start int) (int, bool) {
 	depth := 0
 	inStr := false

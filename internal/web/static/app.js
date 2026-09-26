@@ -18,6 +18,8 @@ let gateKey = "",
   connectionFailed = false;
 let defaultPrompts = {},
   promptRun = "";
+let worktreesAt = 0,
+  worktreesLoading = false;
 const promptStages = {
   planner: "Plan",
   executor: "Execute",
@@ -197,6 +199,64 @@ function renderList(runs) {
     $("runs").append(element("p", "Your runs will appear here.", "muted"));
 }
 
+function worktreeName(path) {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
+// Worktrees run git status, so they refresh less often than runs.
+async function refreshWorktrees(force = false) {
+  if (!connected || worktreesLoading) return;
+  if (!force && Date.now() - worktreesAt < 10000) return;
+  worktreesLoading = true;
+  try {
+    renderWorktrees(await api("/worktrees"));
+    worktreesAt = Date.now();
+  } catch (_) {
+    // The run list reports connection problems.
+  } finally {
+    worktreesLoading = false;
+  }
+}
+
+function renderWorktrees(list) {
+  $("worktree-count").textContent = list.length;
+  $("worktrees").replaceChildren(
+    ...list.map((wt) => {
+      const button = element("button", "", "run-item worktree-item");
+      button.title = wt.path;
+      const branch = wt.branch || "detached " + (wt.head || "").slice(0, 7);
+      const details = [
+        wt.main ? "current checkout" : worktreeName(wt.path),
+        wt.prunable
+          ? "missing directory"
+          : wt.changes
+            ? wt.changes + " changed file" + (wt.changes === 1 ? "" : "s")
+            : "clean",
+      ];
+      if (wt.run_status) details.push("run " + wt.run_status);
+      button.append(
+        element("strong", branch),
+        element("small", details.join(" · ")),
+      );
+      button.addEventListener("click", () => {
+        if (wt.run_id) {
+          select(wt.run_id);
+          return;
+        }
+        // Starting a run on this branch reuses its worktree.
+        selected = "";
+        current = null;
+        listKey = "";
+        $("detail").hidden = true;
+        $("compose").hidden = false;
+        $("branch").value = wt.main ? "" : wt.branch || "";
+        $("prompt").focus();
+      });
+      return button;
+    }),
+  );
+}
+
 async function select(id) {
   selected = id;
   current = null;
@@ -335,6 +395,7 @@ async function refresh() {
   try {
     const runs = await api("/runs");
     renderList(runs);
+    refreshWorktrees();
     if (chooseActive) {
       chooseActive = false;
       if (!selected && runs.some((run) => run.active)) {
@@ -368,6 +429,7 @@ async function action(fn) {
   } finally {
     sending = false;
     gateKey = "";
+    worktreesAt = 0;
     await refresh();
   }
 }

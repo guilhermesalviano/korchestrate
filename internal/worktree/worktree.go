@@ -86,30 +86,49 @@ func Checkout(repo, path, branch string) error {
 	return err
 }
 
+// Info describes one worktree registered with the repository.
+type Info struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch,omitempty"` // empty when HEAD is detached
+	Head   string `json:"head"`
+	Main   bool   `json:"main,omitempty"` // the repository's own checkout
+	// Prunable worktrees are registered but their directory is gone.
+	Prunable bool `json:"prunable,omitempty"`
+}
+
+// List returns every worktree of repo, the main checkout first.
+func List(repo string) ([]Info, error) {
+	out, err := git(repo, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var list []Info
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			list = append(list, Info{Path: strings.TrimSpace(strings.TrimPrefix(line, "worktree")), Main: len(list) == 0})
+		case len(list) == 0:
+		case strings.HasPrefix(line, "HEAD "):
+			list[len(list)-1].Head = strings.TrimPrefix(line, "HEAD ")
+		case strings.HasPrefix(line, "branch "):
+			list[len(list)-1].Branch = strings.TrimPrefix(line, "branch refs/heads/")
+		case line == "prunable" || strings.HasPrefix(line, "prunable "):
+			list[len(list)-1].Prunable = true
+		}
+	}
+	return list, nil
+}
+
 // ForBranch returns the path of the linked worktree that has branch checked
 // out, or "" when the branch is not checked out in any linked worktree. The
 // main worktree (the repository itself) never counts: runs must not adopt the
 // user's own checkout.
 func ForBranch(repo, branch string) string {
-	out, err := git(repo, "worktree", "list", "--porcelain")
-	if err != nil {
-		return ""
-	}
-	want := "branch refs/heads/" + branch
-	path := ""
-	first := true
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "worktree ") {
-			path = strings.TrimSpace(strings.TrimPrefix(line, "worktree"))
-			if first {
-				path = "" // the main worktree is always listed first
-			}
-			first = false
-			continue
-		}
-		if line == want && path != "" {
-			return path
+	list, _ := List(repo)
+	for _, wt := range list {
+		if !wt.Main && wt.Branch == branch {
+			return wt.Path
 		}
 	}
 	return ""

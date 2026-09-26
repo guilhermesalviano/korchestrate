@@ -17,4 +17,6 @@ verify a criterion from the diff, mark it unmet.
 Return ONLY a JSON object conforming to the provided schema, with fields:
 verdict ("pass" only if there are no blocker/major issues and all criteria are
 met), summary, acceptance[], issues[] (severity/file/line/description/suggestion),
-and tests[]. No prose, no markdown fences outside the JSON.
+and tests[]. The top-level object must contain both required keys, "verdict"
+(exactly "pass" or "fail") and a non-empty "summary". No prose, no markdown
+fences outside the JSON.

@@ -150,56 +150,80 @@ func (p *Pipeline) execute(ctx context.Context, plan *contracts.Plan, iter int, 
 	return &report, nil
 }
 
-// review runs the reviewer with one validation retry.
+// review runs the reviewer with one validation retry per agent. Adapter
+// failures and reviews that never satisfy the contract are reported as stage
+// errors so runStage can offer the configured fallback agent.
 func (p *Pipeline) review(ctx context.Context, plan *contracts.Plan, diff string, iter int) (*contracts.Review, error) {
 	if err := p.Run.SetState(artifact.StateReviewing); err != nil {
 		return nil, err
 	}
 	p.Gate.Stage(agent.Reviewer, fmt.Sprintf("reviewing iteration %d with %s", iter, p.Cfg.Models.Reviewer.Model))
 
-	base := renderReviewer(p.Opts.Prompt, plan, diff)
-	var correction string
-	var lastErr error
-	for attempt := 1; attempt <= 2; attempt++ {
-		spec := p.Cfg.Models.Reviewer
-		res, err := p.runStage(ctx, agent.Reviewer, func(a agent.Agent, model string) (*agent.Result, error) {
-			return a.Run(ctx, agent.Request{
-				Dir:       p.worktreePath,
-				Prompt:    base + correction,
-				System:    p.Cfg.Prompts.Resolved().Reviewer,
-				Model:     model,
-				Variant:   spec.Variant,
-				Agent:     spec.SubAgent,
-				ExtraArgs: spec.ExtraArgs,
-				Timeout:   p.Cfg.Timeouts.Reviewer.Duration(),
-				Observe:   p.Gate.Line,
-			})
-		})
-		writeEvents(p.Run, fmt.Sprintf("reviewer.events.%d.jsonl", iter), res)
-		p.addUsage(res)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if len(res.Structured) == 0 {
-			lastErr = errors.New("reviewer returned no structured output")
-			correction = "\n\n(You did not return JSON. Return ONLY the JSON verdict object.)"
-			continue
-		}
-		var review contracts.Review
-		if err := contracts.DecodeObject(res.Structured, &review); err != nil {
-			lastErr = fmt.Errorf("decode review: %w", err)
-			correction = fmt.Sprintf("\n\n(Your JSON was invalid: %v. Return corrected JSON only.)", err)
-			continue
-		}
-		if err := review.Validate(); err != nil {
-			lastErr = fmt.Errorf("invalid review: %w", err)
-			correction = fmt.Sprintf("\n\n(Your review was invalid: %v. Return corrected JSON only.)", err)
-			continue
-		}
-		return &review, nil
+	schemaPath := p.Run.Path("review.schema.json")
+	if err := os.WriteFile(schemaPath, []byte(contracts.ReviewSchema), 0o644); err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("reviewer failed: %w", lastErr)
+	base := renderReviewer(p.Opts.Prompt, plan, diff)
+
+	res, err := p.runStage(ctx, agent.Reviewer, func(a agent.Agent, model string) (*agent.Result, error) {
+		var correction string
+		var lastErr error
+		for attempt := 1; attempt <= 2; attempt++ {
+			spec := p.Cfg.Models.Reviewer
+			tag := fmt.Sprintf("%d.%d.%s", iter, attempt, a.Name())
+			outFile := p.Run.Path("reviewer.last." + tag + ".txt")
+			res, err := a.Run(ctx, agent.Request{
+				Dir:          p.worktreePath,
+				Prompt:       base + correction,
+				System:       p.Cfg.Prompts.Resolved().Reviewer,
+				Model:        model,
+				Variant:      spec.Variant,
+				Agent:        spec.SubAgent,
+				ExtraArgs:    spec.ExtraArgs,
+				SchemaInline: contracts.ReviewSchema,
+				SchemaFile:   schemaPath,
+				OutFile:      outFile,
+				Timeout:      p.Cfg.Timeouts.Reviewer.Duration(),
+				Observe:      p.Gate.Line,
+			})
+			writeEvents(p.Run, "reviewer.events."+tag+".jsonl", res)
+			p.addUsage(res)
+			if res != nil && res.Final != "" {
+				_ = p.Run.Write("reviewer.last."+tag+".txt", []byte(res.Final))
+			}
+			if err != nil {
+				// A broken adapter is runStage's call to make: let it offer a
+				// fallback instead of burning the correction retry.
+				return nil, err
+			}
+			if len(res.Structured) == 0 {
+				lastErr = errors.New("reviewer returned no structured output")
+				correction = "\n\n(You did not return JSON. Return ONLY the JSON verdict object.)"
+				continue
+			}
+			var review contracts.Review
+			if err := contracts.DecodeObject(res.Structured, &review); err != nil {
+				lastErr = fmt.Errorf("decode review: %w", err)
+				correction = fmt.Sprintf("\n\n(Your JSON was invalid: %v. Return corrected JSON only.)", err)
+				continue
+			}
+			if err := review.Validate(); err != nil {
+				lastErr = fmt.Errorf("invalid review: %w", err)
+				correction = fmt.Sprintf("\n\n(Your review was invalid: %v. Return corrected JSON only, with a top-level \"verdict\" of pass or fail.)", err)
+				continue
+			}
+			return res, nil
+		}
+		return nil, fmt.Errorf("reviewer failed: %w", lastErr)
+	})
+	if err != nil {
+		return nil, err
+	}
+	var review contracts.Review
+	if err := contracts.DecodeObject(res.Structured, &review); err != nil {
+		return nil, fmt.Errorf("reviewer failed: decode review: %w", err)
+	}
+	return &review, nil
 }
 
 const maxDiffBytes = 120000

@@ -74,6 +74,45 @@ func jsonEqual(a, b any) bool {
 	return string(ab) == string(bb)
 }
 
+func TestPickJSONObjectPrefersSchemaMatch(t *testing.T) {
+	text := "I inspected package.json:\n{\"name\":\"demo\",\"version\":\"1\"}\n\n" +
+		"Final review:\n{\"verdict\":\"pass\",\"summary\":\"ok\",\"acceptance\":[{\"criterion\":\"c\",\"met\":true}]}\n"
+	got, err := PickJSONObject(text, ReviewSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r Review
+	if err := json.Unmarshal(got, &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Verdict != "pass" || r.Summary != "ok" {
+		t.Fatalf("picked the wrong object: %s", got)
+	}
+}
+
+func TestPickJSONObjectFallsBackToLast(t *testing.T) {
+	got, err := PickJSONObject("first {\"a\":1} then {\"b\":2}", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != `{"b":2}` {
+		t.Fatalf("got %s, want the last object", got)
+	}
+}
+
+func TestPickJSONObjectNoJSON(t *testing.T) {
+	if _, err := PickJSONObject("no json here", ReviewSchema); err == nil {
+		t.Fatal("expected an error")
+	}
+}
+
+func TestExtractJSONObjectsNested(t *testing.T) {
+	objs := ExtractJSONObjects(`{"verdict":"pass","summary":"ok","issues":[{"description":"d"}]}`)
+	if len(objs) != 2 {
+		t.Fatalf("got %d objects, want the review and its nested issue: %v", len(objs), objs)
+	}
+}
+
 func TestPlanValidate(t *testing.T) {
 	if err := (&Plan{}).Validate(); err == nil {
 		t.Fatal("empty plan should be invalid")

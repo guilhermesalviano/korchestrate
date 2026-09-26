@@ -202,3 +202,21 @@ func TestSnapshotIncludesUntrackedWithoutStaging(t *testing.T) {
 		t.Errorf("new.txt should still be untracked:\n%s", st)
 	}
 }
+
+func TestList(t *testing.T) {
+	repo := setupRepo(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	if err := Add(repo, wt, "linked", ""); err != nil {
+		t.Fatal(err)
+	}
+	list, err := List(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || !list[0].Main || list[0].Branch != "main" || list[0].Head == "" {
+		t.Fatalf("unexpected main worktree: %+v", list)
+	}
+	if list[1].Main || list[1].Path != wt || list[1].Branch != "linked" {
+		t.Fatalf("unexpected linked worktree: %+v", list[1])
+	}
+}

@@ -27,6 +27,7 @@ import (
 	"github.com/guilhermesalviano/korchestrate/internal/contracts"
 	"github.com/guilhermesalviano/korchestrate/internal/pipeline"
 	"github.com/guilhermesalviano/korchestrate/internal/ui"
+	"github.com/guilhermesalviano/korchestrate/internal/worktree"
 )
 
 //go:embed static/*
@@ -69,6 +70,7 @@ func New(ctx context.Context, cfg *config.Config, opts pipeline.Options, token s
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/config", s.getConfig)
 	mux.HandleFunc("GET /api/runs", s.list)
+	mux.HandleFunc("GET /api/worktrees", s.worktrees)
 	mux.HandleFunc("POST /api/runs", s.start)
 	mux.HandleFunc("GET /api/runs/{id}", s.detail)
 	mux.HandleFunc("POST /api/runs/{id}/answer", s.answer)
@@ -204,6 +206,44 @@ func (s *Server) list(w http.ResponseWriter, _ *http.Request) {
 		views = append(views, history(run))
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].CreatedAt.After(views[j].CreatedAt) })
+	send(w, 200, views)
+}
+
+// worktreeView is a repository worktree with its pending changes and the
+// newest run that used it, if any.
+type worktreeView struct {
+	worktree.Info
+	Changes   int    `json:"changes"`
+	RunID     string `json:"run_id,omitempty"`
+	RunStatus string `json:"run_status,omitempty"`
+}
+
+func (s *Server) worktrees(w http.ResponseWriter, _ *http.Request) {
+	list, err := worktree.List(s.cfg.Repo)
+	if err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
+	runs, _ := artifact.List(s.cfg.ArtifactsDir)
+	views := make([]worktreeView, 0, len(list))
+	for _, wt := range list {
+		v := worktreeView{Info: wt}
+		if !wt.Prunable {
+			files, _ := worktree.ChangedFiles(wt.Path)
+			v.Changes = len(files)
+		}
+		// The main checkout hosts every in-place run, so only linked
+		// worktrees point at a single run. Runs are listed newest first.
+		if !wt.Main {
+			for _, run := range runs {
+				if filepath.Clean(run.Worktree) == filepath.Clean(wt.Path) {
+					v.RunID, v.RunStatus = run.ID, string(run.State)
+					break
+				}
+			}
+		}
+		views = append(views, v)
+	}
 	send(w, 200, views)
 }
 

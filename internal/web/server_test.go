@@ -336,3 +336,39 @@ func TestRealPipelineThroughHTTPAndResume(t *testing.T) {
 		t.Fatalf("resume did not use edited reviewer prompt: %q", systems.get("opencode"))
 	}
 }
+
+func TestWorktreesListLinkedRunAndChanges(t *testing.T) {
+	s := testServer(t)
+	repo := s.cfg.Repo
+	wt := filepath.Join(t.TempDir(), "wt")
+	for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.name", "test"}, {"config", "user.email", "test@example.com"}, {"commit", "--allow-empty", "-m", "initial"}, {"worktree", "add", "-b", "feature", wt}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git: %v %s", err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(wt, "new.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run, err := artifact.New(s.cfg.ArtifactsDir, repo, "feature work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Worktree = wt
+	if err := run.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	w := request(s, "GET", "/api/worktrees", "")
+	var list []worktreeView
+	if err := json.Unmarshal(w.Body.Bytes(), &list); w.Code != 200 || err != nil {
+		t.Fatalf("worktrees: %d %s", w.Code, w.Body.String())
+	}
+	if len(list) != 2 || !list[0].Main || list[0].RunID != "" {
+		t.Fatalf("unexpected main worktree: %+v", list)
+	}
+	if list[1].Branch != "feature" || list[1].Changes != 1 || list[1].RunID != run.ID {
+		t.Fatalf("unexpected linked worktree: %+v", list[1])
+	}
+}

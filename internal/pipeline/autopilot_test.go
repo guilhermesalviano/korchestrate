@@ -171,6 +171,63 @@ func TestAutopilotPicksNextFreeBranch(t *testing.T) {
 	}
 }
 
+func TestAutopilotFallsBackWhenReviewsStayInvalid(t *testing.T) {
+	repo := setupRepo(t)
+	cfg := baseConfig(t, repo)
+	gate := &silentGate{t: t}
+
+	var opencodeRuns, claudeReviewRuns int
+	factory := func(name string) (agent.Agent, error) {
+		switch name {
+		case "claude":
+			return fakeAgent{"claude", agent.Planner, func(_ context.Context, r agent.Request) (*agent.Result, error) {
+				if strings.Contains(r.Prompt, "## Diff under review") {
+					claudeReviewRuns++
+					return &agent.Result{Final: `{"verdict":"pass","summary":"recovered"}`,
+						Structured: json.RawMessage(`{"verdict":"pass","summary":"recovered"}`)}, nil
+				}
+				return &agent.Result{Structured: planJSON(t)}, nil
+			}}, nil
+		case "codex":
+			return fakeAgent{"codex", agent.Executor, func(_ context.Context, r agent.Request) (*agent.Result, error) {
+				return &agent.Result{}, os.WriteFile(filepath.Join(r.Dir, "feature.txt"), []byte("ok\n"), 0o644)
+			}}, nil
+		default:
+			return fakeAgent{"opencode", agent.Reviewer, func(context.Context, agent.Request) (*agent.Result, error) {
+				opencodeRuns++
+				return &agent.Result{Final: `{"summary":"no verdict"}`,
+					Structured: json.RawMessage(`{"summary":"no verdict"}`),
+					Events:     []json.RawMessage{json.RawMessage(`{"type":"text"}`)}}, nil
+			}}, nil
+		}
+	}
+
+	p := &Pipeline{Cfg: cfg, Opts: Options{Repo: repo, Prompt: "add feature", Name: "auto", Autopilot: true}, Gate: gate, AgentFactory: factory}
+	if err := p.Execute(context.Background()); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if opencodeRuns != 2 {
+		t.Fatalf("opencode reviewer ran %d times, want 2 attempts before falling back", opencodeRuns)
+	}
+	if claudeReviewRuns != 1 {
+		t.Fatalf("claude fallback reviewer ran %d times, want 1", claudeReviewRuns)
+	}
+	if p.Run.State != artifact.StateDone {
+		t.Fatalf("state = %s, want done", p.Run.State)
+	}
+	// Every attempt must leave its raw output behind for debugging.
+	for _, name := range []string{
+		"reviewer.last.0.1.opencode.txt",
+		"reviewer.last.0.2.opencode.txt",
+		"reviewer.last.0.1.claude.txt",
+		"reviewer.events.0.1.opencode.jsonl",
+	} {
+		if _, err := os.Stat(p.Run.Path(name)); err != nil {
+			t.Errorf("missing artifact %s: %v", name, err)
+		}
+	}
+}
+
 func TestPRTitleIsCommitSubject(t *testing.T) {
 	if got := prTitle("feat: add pages\n\nbody\n\nkor run x"); got != "feat: add pages" {
 		t.Fatalf("title = %q", got)

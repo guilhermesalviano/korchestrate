@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/guilhermesalviano/korchestrate/internal/contracts"
@@ -16,6 +17,17 @@ func (OpenCode) Name() string { return "opencode" }
 func (OpenCode) Kind() Kind   { return Reviewer }
 
 func (c OpenCode) Run(ctx context.Context, r Request) (*Result, error) {
+	schema := r.SchemaInline
+	if schema == "" && r.SchemaFile != "" {
+		if data, err := os.ReadFile(r.SchemaFile); err == nil {
+			schema = string(data)
+		}
+	}
+	prompt := r.promptWithSystem()
+	if schema != "" {
+		prompt += "\n\nReturn ONE JSON object validating against this JSON Schema:\n```json\n" + schema + "\n```"
+	}
+
 	args := []string{"run", "-m", r.Model, "--format", "json"}
 	if r.Dir != "" {
 		args = append(args, "--dir", r.Dir)
@@ -27,7 +39,7 @@ func (c OpenCode) Run(ctx context.Context, r Request) (*Result, error) {
 		args = append(args, "--variant", r.Variant)
 	}
 	args = append(args, r.ExtraArgs...)
-	args = append(args, r.promptWithSystem())
+	args = append(args, prompt)
 
 	r.Observe.Status(Reviewer, "opencode review started ("+r.Model+")")
 	proc := Exec(ctx, ProcSpec{
@@ -84,7 +96,7 @@ func (c OpenCode) Run(ctx context.Context, r Request) (*Result, error) {
 	}
 
 	res.Final = text.String()
-	raw, err := contracts.ExtractJSON(res.Final)
+	raw, err := contracts.PickJSONObject(res.Final, schema)
 	if err != nil {
 		// Last resort: try the raw stdout (some versions print plain text).
 		// JSONL event output must not be scanned: its first event object
@@ -92,7 +104,7 @@ func (c OpenCode) Run(ctx context.Context, r Request) (*Result, error) {
 		if len(res.Events) > 0 {
 			return res, fmt.Errorf("opencode: no JSON verdict in output: %w", err)
 		}
-		if raw2, err2 := contracts.ExtractJSON(proc.Stdout); err2 == nil {
+		if raw2, err2 := contracts.PickJSONObject(proc.Stdout, schema); err2 == nil {
 			res.Structured = raw2
 			return res, nil
 		}
