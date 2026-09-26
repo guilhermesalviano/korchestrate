@@ -155,7 +155,7 @@ func (p *Pipeline) execute(ctx context.Context, plan *contracts.Plan, iter int, 
 // review runs the reviewer with one validation retry per agent. Adapter
 // failures and reviews that never satisfy the contract are reported as stage
 // errors so runStage can offer the configured fallback agent.
-func (p *Pipeline) review(ctx context.Context, plan *contracts.Plan, diff string, iter int) (*contracts.Review, error) {
+func (p *Pipeline) review(ctx context.Context, plan *contracts.Plan, diff string, report *contracts.ExecReport, iter int) (*contracts.Review, error) {
 	if err := p.Run.SetState(artifact.StateReviewing); err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func (p *Pipeline) review(ctx context.Context, plan *contracts.Plan, diff string
 	if err := os.WriteFile(schemaPath, []byte(contracts.ReviewSchema), 0o644); err != nil {
 		return nil, err
 	}
-	base := renderReviewer(p.Opts.Prompt, plan, diff)
+	base := renderReviewer(p.Opts.Prompt, plan, diff, report)
 
 	res, err := p.runStage(ctx, agent.Reviewer, func(a agent.Agent, model string) (*agent.Result, error) {
 		var correction string
@@ -260,11 +260,30 @@ func renderExecutor(request string, plan *contracts.Plan, planFile string, iter 
 	return b.String()
 }
 
-func renderReviewer(request string, plan *contracts.Plan, diff string) string {
+func renderReviewer(request string, plan *contracts.Plan, diff string, report *contracts.ExecReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Original request\n%s\n\n", request)
 	fmt.Fprintf(&b, "## Approved plan\n\n%s\n", demoteHeadings(plan.Markdown()))
 	b.WriteString("Verify every item under Acceptance criteria.\n")
+	b.WriteString("\n## Executor's report\n")
+	if report == nil {
+		b.WriteString("The executor returned no report, so no checks are known to have run.\n")
+	} else {
+		fmt.Fprintf(&b, "Status: %s\n%s\n", report.Status, strings.TrimSpace(report.Summary))
+		b.WriteString("\nChecks the executor ran, with their results (do not run them again):\n")
+		if len(report.Commands) == 0 {
+			b.WriteString("- none\n")
+		}
+		for _, c := range report.Commands {
+			fmt.Fprintf(&b, "- %s\n", c)
+		}
+		if len(report.KnownGaps) > 0 {
+			b.WriteString("\nKnown gaps:\n")
+			for _, g := range report.KnownGaps {
+				fmt.Fprintf(&b, "- %s\n", g)
+			}
+		}
+	}
 	fmt.Fprintf(&b, "\n## Diff under review\n```diff\n%s\n```\n", capDiff(diff))
 	b.WriteString("\nInspect the worktree as needed, then return ONLY the JSON review object.")
 	return b.String()

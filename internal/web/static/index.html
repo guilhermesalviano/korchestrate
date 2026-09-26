@@ -7,6 +7,14 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <meta name="theme-color" content="#101514" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="kor" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="format-detection" content="telephone=no" />
     <title>kor · dashboard</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/style.css" />
@@ -14,13 +22,28 @@
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="/"
-        >k<span>o</span>r<span class="brand-label"> / orchestrate</span></a
-      ><span id="connection" role="status">Connecting…</span>
+      <div class="topbar-left">
+        <button
+          id="sidebar-toggle"
+          class="sidebar-toggle"
+          type="button"
+          aria-controls="sidebar"
+          aria-expanded="false"
+          aria-label="Show run list"
+        >
+          <span class="sidebar-toggle-icon" aria-hidden="true"></span>
+          <span class="sidebar-toggle-label">Runs</span>
+          <span id="toggle-count" class="toggle-count">0</span>
+        </button>
+        <a class="brand" href="/"
+          >k<span>o</span>r<span class="brand-label"> / orchestrate</span></a
+        >
+      </div>
+      <span id="connection" role="status">Connecting…</span>
     </header>
     <div id="error" role="alert" hidden></div>
     <div id="app" class="layout" hidden>
-      <aside class="sidebar">
+      <aside id="sidebar" class="sidebar">
         <div class="sidebar-heading">
           <h2>Workspace</h2>
           <button id="new-run" class="primary">+ New run</button>
@@ -99,11 +122,29 @@
             <button id="cancel" class="danger" hidden>Stop run</button>
           </div>
           <p id="run-status" class="status" role="status"></p>
-          <div class="pipeline" aria-label="Pipeline stages">
-            <div data-stage="planner"><span>01</span> Plan</div>
-            <div data-stage="executor"><span>02</span> Execute</div>
-            <div data-stage="reviewer"><span>03</span> Review</div>
-          </div>
+          <ol class="pipeline" aria-label="Pipeline stages">
+            <li data-stage="planner" data-state="pending">
+              <span class="stage-dot" aria-hidden="true"></span
+              ><span class="stage-num">01</span
+              ><span class="stage-name">Plan</span>
+              <small class="stage-note">Up next</small>
+              <i class="stage-bar" aria-hidden="true"></i>
+            </li>
+            <li data-stage="executor" data-state="pending">
+              <span class="stage-dot" aria-hidden="true"></span
+              ><span class="stage-num">02</span
+              ><span class="stage-name">Execute</span>
+              <small class="stage-note">Up next</small>
+              <i class="stage-bar" aria-hidden="true"></i>
+            </li>
+            <li data-stage="reviewer" data-state="pending">
+              <span class="stage-dot" aria-hidden="true"></span
+              ><span class="stage-num">03</span
+              ><span class="stage-name">Review</span>
+              <small class="stage-note">Up next</small>
+              <i class="stage-bar" aria-hidden="true"></i>
+            </li>
+          </ol>
           <p id="run-meta" class="muted meta"></p>
           <p id="run-error" class="run-error" hidden></p>
           <section
@@ -154,5 +195,6 @@
         </section>
       </main>
     </div>
+    <div id="scrim" class="scrim" hidden></div>
   </body>
 </html>

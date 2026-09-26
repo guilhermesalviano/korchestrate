@@ -417,12 +417,15 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 // skipExec reviews the worktree as it stands, which is how a failed review is
 // retried without redoing the execution.
 func (p *Pipeline) cycle(ctx context.Context, plan *contracts.Plan, iter int, fix string, skipExec bool) (bool, string, error) {
+	var report *contracts.ExecReport
 	if skipExec {
 		if err := worktree.Stage(p.worktreePath); err != nil {
 			return false, "", err
 		}
+		report = latestExecReport(p.Run)
 	} else {
-		report, err := retryStep(ctx, p, "executor", func() (*contracts.ExecReport, error) {
+		var err error
+		report, err = retryStep(ctx, p, "executor", func() (*contracts.ExecReport, error) {
 			report, execErr := p.execute(ctx, plan, iter, fix)
 			if stageErr := worktree.Stage(p.worktreePath); stageErr != nil && execErr == nil {
 				return report, stageErr
@@ -450,7 +453,7 @@ func (p *Pipeline) cycle(ctx context.Context, plan *contracts.Plan, iter int, fi
 	p.Gate.Info("executor changes staged on " + p.branch)
 	p.processControls()
 
-	review, err := retryStep(ctx, p, "reviewer", func() (*contracts.Review, error) { return p.review(ctx, plan, diff, iter) })
+	review, err := retryStep(ctx, p, "reviewer", func() (*contracts.Review, error) { return p.review(ctx, plan, diff, report, iter) })
 	if err != nil {
 		return false, "", err
 	}
@@ -634,4 +637,20 @@ func loadRunPlan(run *artifact.Run) (plan *contracts.Plan, edited bool, err erro
 		return nil, false, err
 	}
 	return fromMD, true, nil
+}
+
+// latestExecReport returns the report of the run's last executor pass, so a
+// review resumed on its own still sees which checks already ran.
+func latestExecReport(run *artifact.Run) *contracts.ExecReport {
+	for iter := run.Iteration; iter >= 0; iter-- {
+		data, err := run.Read(fmt.Sprintf("executor.report.%d.json", iter))
+		if err != nil {
+			continue
+		}
+		var report contracts.ExecReport
+		if json.Unmarshal(data, &report) == nil {
+			return &report
+		}
+	}
+	return nil
 }

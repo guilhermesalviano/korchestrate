@@ -66,6 +66,26 @@ function setText(id, text) {
   if ($(id).textContent !== text) $(id).textContent = text;
 }
 
+// The run list is a drawer below 800px; on wider screens the class has no
+// effect and the sidebar stays in the layout.
+const sidebarToggle = $("sidebar-toggle");
+function setSidebar(open) {
+  document.body.classList.toggle("sidebar-open", open);
+  sidebarToggle.setAttribute("aria-expanded", String(open));
+  sidebarToggle.setAttribute(
+    "aria-label",
+    open ? "Hide run list" : "Show run list",
+  );
+  $("scrim").hidden = !open;
+}
+sidebarToggle.addEventListener("click", () =>
+  setSidebar(!document.body.classList.contains("sidebar-open")),
+);
+$("scrim").addEventListener("click", () => setSidebar(false));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setSidebar(false);
+});
+
 function promptEditor(prefix, prompts, readOnly = false) {
   const container = $(prefix + "-prompts");
   container.replaceChildren(
@@ -259,6 +279,11 @@ function renderList(runs) {
     ? "Finish or stop the active run to start another."
     : "You approve each step in default mode.";
   $("run-count").textContent = runs.length;
+  $("toggle-count").textContent = runs.length;
+  sidebarToggle.classList.toggle(
+    "attention",
+    runs.some((run) => run.gate),
+  );
   const key =
     JSON.stringify(
       runs.map((run) => [
@@ -349,6 +374,8 @@ function renderWorktrees(list) {
         selected = "";
         current = null;
         listKey = "";
+        setSidebar(false);
+        window.scrollTo(0, 0);
         $("detail").hidden = true;
         $("compose").hidden = false;
         $("branch").value = wt.main ? "" : wt.branch || "";
@@ -359,11 +386,97 @@ function renderWorktrees(list) {
   );
 }
 
+// Pipeline states map to the step being worked on; 3 means every step is done.
+const stateStep = {
+  preflight: 0,
+  worktree: 0,
+  planning: 0,
+  gate_plan: 0,
+  executing: 1,
+  reviewing: 2,
+  gate_review: 2,
+  publishing: 3,
+  committing: 3,
+  done: 3,
+};
+const stepOrder = ["planner", "executor", "reviewer"];
+const stepNotes = {
+  planner: {
+    active: "Planning…",
+    waiting: "Needs your approval",
+    done: "Plan approved",
+  },
+  executor: {
+    active: "Implementing…",
+    waiting: "Needs you",
+    done: "Changes made",
+  },
+  reviewer: {
+    active: "Reviewing…",
+    waiting: "Needs your decision",
+    done: "Review passed",
+  },
+};
+
+// stepStates returns each step's state: pending, active, waiting, done,
+// failed or stopped.
+function stepStates(run) {
+  const state = run.run?.state || (run.active ? "preflight" : "");
+  let at = stateStep[state] ?? -1;
+  let mode = run.gate ? "waiting" : run.active ? "active" : "stopped";
+  if (state === "failed" || state === "aborted") {
+    // The saved artifacts show how far the run got.
+    at = run.review ? 2 : run.plan ? 1 : 0;
+    if (run.diff && !run.review) at = 2;
+    mode = state === "failed" ? "failed" : "stopped";
+  }
+  return stepOrder.map((_, i) =>
+    i < at ? "done" : i === at ? mode : "pending",
+  );
+}
+
+function stepNote(run, stage, state) {
+  const iteration = run.run?.iteration || 0;
+  if (state === "active" && run.run?.state === "preflight")
+    return "Preparing workspace…";
+  if (state === "active" && iteration > 0) {
+    if (stage === "executor") return "Fix pass " + iteration + "…";
+    if (stage === "reviewer") return "Review " + (iteration + 1) + "…";
+  }
+  if (state === "failed") return "Failed";
+  if (state === "stopped") return "Stopped here";
+  if (state === "pending") return "Up next";
+  return stepNotes[stage][state] || "";
+}
+
+function renderStages(run) {
+  const states = stepStates(run);
+  const list = document.querySelector(".pipeline");
+  list.classList.toggle(
+    "complete",
+    states.every((state) => state === "done"),
+  );
+  stepOrder.forEach((stage, i) => {
+    const el = list.querySelector('[data-stage="' + stage + '"]');
+    // Setting the same state again must not restart its entry animation.
+    if (el.dataset.state !== states[i]) el.dataset.state = states[i];
+    const note = el.querySelector(".stage-note");
+    const text = stepNote(run, stage, states[i]);
+    if (note.textContent !== text) note.textContent = text;
+    el.setAttribute(
+      "aria-current",
+      states[i] === "active" || states[i] === "waiting" ? "step" : "false",
+    );
+  });
+}
+
 async function select(id) {
   selected = id;
   current = null;
   gateKey = "";
   listKey = "";
+  setSidebar(false);
+  window.scrollTo(0, 0);
   $("compose").hidden = true;
   $("detail").hidden = true;
   message();
@@ -404,17 +517,7 @@ function renderDetail(run) {
   );
   $("run-error").hidden = !run.error;
   setText("run-error", run.error || "");
-  const stage =
-    run.gate?.kind === "plan"
-      ? "planner"
-      : run.gate?.kind === "review"
-        ? "reviewer"
-        : run.status.split(":")[0];
-  document
-    .querySelectorAll("[data-stage]")
-    .forEach((el) =>
-      el.classList.toggle("current", run.active && el.dataset.stage === stage),
-    );
+  renderStages(run);
   $("gate").hidden = !run.gate;
   const nextKey = run.id + ":" + (run.gate?.id || "");
   if (nextKey !== gateKey) {
@@ -557,6 +660,8 @@ $("new-run").addEventListener("click", () => {
   selected = "";
   current = null;
   listKey = "";
+  setSidebar(false);
+  window.scrollTo(0, 0);
   $("detail").hidden = true;
   $("compose").hidden = false;
   $("prompt").focus();

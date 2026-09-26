@@ -688,3 +688,45 @@ func TestResumeUsesEditedPlanMarkdown(t *testing.T) {
 		t.Fatalf("plan.json not updated from plan.md: %s", data)
 	}
 }
+
+func TestReviewerGetsExecutorChecks(t *testing.T) {
+	repo := setupRepo(t)
+	cfg := baseConfig(t, repo)
+	var reviewPrompts []string
+	factory := func(name string) (agent.Agent, error) {
+		return fakeAgent{name, agent.Executor, func(_ context.Context, r agent.Request) (*agent.Result, error) {
+			switch r.Role {
+			case agent.Planner:
+				return &agent.Result{Structured: planJSON(t)}, nil
+			case agent.Executor:
+				if err := os.WriteFile(filepath.Join(r.Dir, "feature.txt"), []byte("ok\n"), 0o644); err != nil {
+					return nil, err
+				}
+				return &agent.Result{Structured: json.RawMessage(`{"status":"done","changed_files":["feature.txt"],"summary":"wrote feature","commands":["npm test → passed (3 tests)"],"known_gaps":[]}`)}, nil
+			default:
+				reviewPrompts = append(reviewPrompts, r.Prompt)
+				return &agent.Result{Structured: json.RawMessage(`{"verdict":"pass","summary":"ok"}`)}, nil
+			}
+		}}, nil
+	}
+	gate := &recordingGate{}
+	p := &Pipeline{Cfg: cfg, Opts: Options{Repo: repo, Prompt: "add feature", Name: "checks"}, Gate: gate, AgentFactory: factory}
+	if err := p.Execute(context.Background()); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	// A review resumed on its own reads the saved report.
+	retry := &Pipeline{Cfg: cfg, Run: p.Run, Opts: Options{Repo: repo, Prompt: "add feature", From: agent.Reviewer}, Gate: gate, AgentFactory: factory}
+	if err := retry.Execute(context.Background()); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if len(reviewPrompts) != 2 {
+		t.Fatalf("reviews = %d", len(reviewPrompts))
+	}
+	for i, prompt := range reviewPrompts {
+		for _, want := range []string{"## Executor's report", "- npm test → passed (3 tests)", "do not run them again"} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("review %d missing %q:\n%s", i, want, prompt)
+			}
+		}
+	}
+}

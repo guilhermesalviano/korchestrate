@@ -453,11 +453,7 @@ func (a *App) renderFlow(e *Entry, w int) string {
 	parts := make([]string, 0, 5)
 	for i, k := range stageOrder {
 		if i > 0 {
-			col := cFaint
-			if e.Stages[stageOrder[i-1]].done {
-				col = cGreen
-			}
-			parts = append(parts, lipgloss.NewStyle().Foreground(col).Render(" ━━▶ "))
+			parts = append(parts, a.flowArrow(e.Stages[stageOrder[i-1]], e.Stages[k], e.Live))
 		}
 		parts = append(parts, a.stageCard(e, k, cardW))
 	}
@@ -465,6 +461,35 @@ func (a *App) renderFlow(e *Entry, w int) string {
 	flow := row + "\n" + a.loopLine(e, cardW)
 	pad := strings.Repeat(" ", max(0, (w-lipgloss.Width(row))/2))
 	return pad + strings.ReplaceAll(flow, "\n", "\n"+pad)
+}
+
+// flowArrow connects two stage cards. While work flows from a finished stage
+// into a running one, a light travels along the arrow.
+func (a *App) flowArrow(prev, next *StageInfo, live bool) string {
+	if !prev.done {
+		return faintStyle.Render(" ━━▶ ")
+	}
+	if !live || next.done || next.failed || next.status == "" || awaiting(next) {
+		return greenStyle.Render(" ━━▶ ")
+	}
+	glyphs := []string{"━", "━", "▶"}
+	lit := a.frame / 2 % (len(glyphs) + 1) // one dark beat between passes
+	var b strings.Builder
+	b.WriteString(" ")
+	for i, g := range glyphs {
+		if i == lit {
+			b.WriteString(cyanStyle.Bold(true).Render(g))
+		} else {
+			b.WriteString(greenStyle.Render(g))
+		}
+	}
+	b.WriteString(" ")
+	return b.String()
+}
+
+// awaiting reports whether a stage is waiting for the user's decision.
+func awaiting(si *StageInfo) bool {
+	return strings.Contains(strings.ToLower(si.status), "awaiting")
 }
 
 // loopLine draws the fix-loop return path from the reviewer back to the
@@ -506,6 +531,11 @@ func (a *App) stageCard(e *Entry, k agent.Kind, w int) string {
 		border = cRed
 	case si.done:
 		border = cGreen
+	case awaiting(si) && e.Live:
+		border = cAmber
+		if a.frame/4%2 == 1 {
+			border = cGold
+		}
 	case si.status != "" && e.Live:
 		border = cCyan
 		if a.frame/5%2 == 1 {
@@ -552,6 +582,12 @@ func (a *App) stageStatus(si *StageInfo, live bool) (glyph, word string, col lip
 		return "✘", statusWord(si.status, "failed"), cRed
 	case si.done:
 		return "✔", "done", cGreen
+	case awaiting(si) && live:
+		glyph = "◆"
+		if a.frame/4%2 == 1 {
+			glyph = "◇"
+		}
+		return glyph, "your turn", cGold
 	case si.status != "" && live:
 		return spin[a.frame%len(spin)], statusWord(si.status, "running"), cCyan
 	case si.status != "":

@@ -7,6 +7,10 @@
   --muted: #9aa99e;
   --accent: #cae894;
   --red: #ffa494;
+  --amber: #f2c46d;
+  --stage-gap: 30px;
+  --topbar-h: 76px;
+  --pad-x: 32px;
   font-family:
     Inter,
     ui-sans-serif,
@@ -19,6 +23,10 @@
 }
 * {
   box-sizing: border-box;
+}
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 body {
   margin: 0;
@@ -38,8 +46,11 @@ button,
 a,
 input,
 textarea,
-select {
+select,
+summary,
+label {
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 button {
   border: 1px solid var(--line);
@@ -108,13 +119,55 @@ h2 {
   margin-bottom: 16px;
 }
 .topbar {
-  height: 76px;
-  padding: 0 32px;
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  height: calc(var(--topbar-h) + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top)
+    max(var(--pad-x), env(safe-area-inset-right)) 0
+    max(var(--pad-x), env(safe-area-inset-left));
   display: flex;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
+  background: var(--bg);
   gap: 12px;
+}
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+.sidebar-toggle {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  min-height: 40px;
+  font-size: 13px;
+}
+.sidebar-toggle-icon::before {
+  content: "☰";
+  font-size: 15px;
+  line-height: 1;
+}
+body.sidebar-open .sidebar-toggle-icon::before {
+  content: "✕";
+}
+.toggle-count {
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+.sidebar-toggle.attention .toggle-count {
+  background: var(--accent);
+  color: #1e2e10;
 }
 .brand {
   text-decoration: none;
@@ -135,6 +188,10 @@ h2 {
 #connection {
   font-size: 12px;
   color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 #connection.connected:before {
   content: "";
@@ -148,7 +205,14 @@ h2 {
 .layout {
   display: grid;
   grid-template-columns: 290px minmax(0, 1fr);
-  min-height: calc(100dvh - 76px);
+  min-height: calc(100dvh - var(--topbar-h) - env(safe-area-inset-top));
+}
+.scrim {
+  position: fixed;
+  inset: calc(var(--topbar-h) + env(safe-area-inset-top)) 0 0 0;
+  z-index: 40;
+  display: none;
+  background: rgba(8, 12, 10, 0.62);
 }
 .sidebar {
   padding: 28px 20px;
@@ -237,7 +301,8 @@ h2 {
   margin: 30px 0 0;
 }
 main {
-  padding: 38px 44px;
+  padding: 38px max(44px, env(safe-area-inset-right)) 38px
+    max(44px, env(safe-area-inset-left));
   min-width: 0;
   max-width: 1300px;
   width: 100%;
@@ -370,30 +435,301 @@ textarea::placeholder {
   font-size: 13px;
   overflow-wrap: anywhere;
 }
+/* --- Pipeline steps ------------------------------------------------------ */
 .pipeline {
+  list-style: none;
+  padding: 0;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--stage-gap);
   margin: 24px 0 16px;
 }
-.pipeline div {
+.pipeline li {
+  position: relative;
   border: 1px solid var(--line);
-  padding: 15px;
-  border-radius: 7px;
+  padding: 14px 15px 18px;
+  border-radius: 9px;
+  background: var(--panel);
   color: var(--muted);
   font-size: 13px;
+  min-width: 0;
+  transition:
+    border-color 0.4s ease,
+    background 0.4s ease,
+    color 0.4s ease;
 }
-.pipeline div.current {
-  border-color: #738e54;
-  background: #202c1d;
-  color: var(--accent);
-}
-.pipeline span {
+.stage-num {
   font:
     10px ui-monospace,
     monospace;
-  margin-right: 10px;
+  margin-right: 8px;
   color: var(--muted);
+}
+.stage-name {
+  font-weight: 600;
+}
+.stage-note {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Status dot: ring when pending, ripple when running, check when done. */
+.stage-dot {
+  position: relative;
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 9px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  vertical-align: -1px;
+  transition:
+    background 0.3s,
+    border-color 0.3s;
+}
+.stage-dot::after {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  border-radius: 50%;
+}
+
+/* Progress bar along the bottom of each step. */
+.stage-bar {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 8px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+.stage-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Connector to the next step. */
+.pipeline li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 1px);
+  width: calc(var(--stage-gap) - 2px);
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 2px;
+  background: var(--line);
+  transition: background 0.5s;
+}
+
+/* Running */
+.pipeline li[data-state="active"] {
+  border-color: #738e54;
+  background: #1d281b;
+  color: var(--accent);
+  animation:
+    stage-enter 0.5s cubic-bezier(0.2, 0.8, 0.2, 1),
+    stage-glow 2.4s ease-in-out 0.5s infinite;
+}
+.pipeline li[data-state="active"] .stage-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.pipeline li[data-state="active"] .stage-dot::after {
+  border: 1.5px solid var(--accent);
+  animation: stage-ripple 1.6s ease-out infinite;
+}
+.pipeline li[data-state="active"] .stage-note {
+  color: var(--text);
+}
+.pipeline li[data-state="active"] .stage-bar::after {
+  width: 40%;
+  transform: none;
+  transition: none;
+  animation: stage-sweep 1.4s ease-in-out infinite;
+}
+
+/* Waiting for you */
+.pipeline li[data-state="waiting"] {
+  border-color: #8f7640;
+  background: #262217;
+  color: var(--amber);
+  animation:
+    stage-enter 0.5s cubic-bezier(0.2, 0.8, 0.2, 1),
+    stage-attention 1.8s ease-in-out 0.5s infinite;
+}
+.pipeline li[data-state="waiting"] .stage-dot {
+  background: var(--amber);
+  border-color: var(--amber);
+  animation: stage-blink 1.2s ease-in-out infinite;
+}
+.pipeline li[data-state="waiting"] .stage-note {
+  color: var(--amber);
+}
+.pipeline li[data-state="waiting"] .stage-bar::after {
+  background: var(--amber);
+  transform: scaleX(0.92);
+}
+
+/* Done: the dot turns into a check that pops in. */
+.pipeline li[data-state="done"] {
+  border-color: #485c38;
+  color: var(--text);
+}
+.pipeline li[data-state="done"] .stage-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  animation: stage-pop 0.45s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+.pipeline li[data-state="done"] .stage-dot::after {
+  inset: auto;
+  left: 2.5px;
+  top: 0.5px;
+  width: 3px;
+  height: 5.5px;
+  border: solid var(--bg);
+  border-width: 0 1.5px 1.5px 0;
+  border-radius: 0;
+  transform: rotate(45deg);
+}
+.pipeline li[data-state="done"] .stage-bar::after {
+  transform: scaleX(1);
+}
+.pipeline li[data-state="done"]:not(:last-child)::after {
+  background: #5e7a44;
+}
+/* Work flows from a finished step into the running one. */
+.pipeline li[data-state="done"]:has(+ li[data-state="active"])::after,
+.pipeline li[data-state="done"]:has(+ li[data-state="waiting"])::after {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--accent) 0 6px,
+    transparent 6px 11px
+  );
+  background-size: 22px 2px;
+  animation: stage-flow 0.7s linear infinite;
+}
+
+/* Failed / stopped */
+.pipeline li[data-state="failed"] {
+  border-color: #744b3c;
+  background: #2a1d19;
+  color: var(--red);
+  animation: stage-shake 0.5s ease-in-out;
+}
+.pipeline li[data-state="failed"] .stage-dot {
+  background: var(--red);
+  border-color: var(--red);
+}
+.pipeline li[data-state="failed"] .stage-note {
+  color: var(--red);
+}
+.pipeline li[data-state="stopped"] {
+  border-style: dashed;
+  border-color: #6b5f45;
+}
+.pipeline li[data-state="stopped"] .stage-dot {
+  border-color: var(--amber);
+}
+
+/* A finished run lifts each step in turn. */
+.pipeline.complete li {
+  animation: stage-complete 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.pipeline.complete li:nth-child(2) {
+  animation-delay: 0.12s;
+}
+.pipeline.complete li:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
+@keyframes stage-enter {
+  from {
+    transform: translateY(4px) scale(0.98);
+    opacity: 0.6;
+  }
+}
+@keyframes stage-glow {
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(202, 232, 148, 0.18),
+      0 0 22px rgba(202, 232, 148, 0.12);
+  }
+}
+@keyframes stage-attention {
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(242, 196, 109, 0.25),
+      0 0 22px rgba(242, 196, 109, 0.14);
+  }
+}
+@keyframes stage-ripple {
+  from {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@keyframes stage-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(260%);
+  }
+}
+@keyframes stage-blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes stage-pop {
+  0% {
+    transform: scale(0.4);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes stage-flow {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 22px 0;
+  }
+}
+@keyframes stage-shake {
+  20%,
+  60% {
+    transform: translateX(-3px);
+  }
+  40%,
+  80% {
+    transform: translateX(3px);
+  }
+}
+@keyframes stage-complete {
+  40% {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 22px rgba(202, 232, 148, 0.12);
+  }
 }
 .meta {
   font:
@@ -547,59 +883,76 @@ textarea::placeholder {
   font-size: 12px;
 }
 @media (max-width: 800px) {
+  :root {
+    --topbar-h: 64px;
+    --pad-x: 20px;
+  }
   .prompt-stage textarea {
     font-size: 16px;
   }
-}
-@media (min-width: 1500px) {
-  main {
-    padding: 48px 60px;
-  }
-}
-@media (max-width: 800px) {
-  .topbar {
-    height: 64px;
-    padding: 0 20px;
+  .sidebar-toggle {
+    display: inline-flex;
   }
   .layout {
     grid-template-columns: 1fr;
   }
+  .scrim {
+    display: block;
+  }
   .sidebar {
-    padding: 20px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
+    position: fixed;
+    z-index: 50;
+    top: calc(var(--topbar-h) + env(safe-area-inset-top));
+    bottom: 0;
+    left: 0;
+    width: min(86vw, 330px);
+    padding: 20px max(20px, env(safe-area-inset-left))
+      max(28px, env(safe-area-inset-bottom));
+    background: var(--bg);
+    border-right: 1px solid var(--line);
+    border-bottom: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    transform: translateX(-102%);
+    visibility: hidden;
+    transition:
+      transform 0.22s ease,
+      visibility 0s linear 0.22s;
+  }
+  body.sidebar-open {
+    overflow: hidden;
+  }
+  body.sidebar-open .sidebar {
+    transform: translateX(0);
+    visibility: visible;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+    transition: transform 0.22s ease;
   }
   .repo {
-    margin: 12px 0;
+    margin: 12px 0 24px;
   }
-  .section-label,
-  .sidebar-note {
-    display: none;
-  }
-  #runs {
-    display: flex;
-    gap: 8px;
-    overflow-x: auto;
-    margin-top: 12px;
-    max-height: none;
-  }
+  #runs,
   #worktrees {
-    display: flex;
+    display: grid;
     gap: 8px;
-    overflow-x: auto;
-    margin-top: 8px;
     max-height: none;
+    overflow: visible;
   }
   .run-item {
-    flex: 0 0 200px;
-    padding: 10px 12px;
+    width: 100%;
+    padding: 12px 14px;
     border-color: var(--line);
   }
   .run-item small {
     margin-top: 5px;
   }
+  .sidebar-note {
+    display: none;
+  }
   main {
-    padding: 24px 20px 40px;
+    padding: 24px max(20px, env(safe-area-inset-right))
+      max(40px, env(safe-area-inset-bottom))
+      max(20px, env(safe-area-inset-left));
   }
   .panel {
     padding: 22px;
@@ -609,15 +962,35 @@ textarea::placeholder {
   }
   .brand-label {
     font-size: 11px;
+    margin-left: 10px;
+  }
+  .run-heading {
+    flex-wrap: wrap;
+    gap: 12px;
   }
   .run-heading h1 {
     font-size: 23px;
   }
-  .pipeline div {
-    padding: 14px 10px;
+  .run-heading button {
+    font-size: 12px;
+    padding: 10px 14px;
   }
-  .pipeline span {
-    margin-right: 5px;
+  .pipeline {
+    --stage-gap: 14px;
+  }
+  .pipeline li {
+    padding: 12px 10px 16px;
+  }
+  .stage-num {
+    display: none;
+  }
+  .stage-dot {
+    margin-right: 6px;
+  }
+  .stage-bar {
+    left: 10px;
+    right: 10px;
+    bottom: 7px;
   }
   #output {
     padding: 16px;
@@ -634,34 +1007,102 @@ textarea::placeholder {
   }
   .form-actions {
     align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  .check {
+    min-height: 44px;
   }
   .output-footer {
     padding: 4px 12px;
   }
   .tabs {
     padding: 6px;
+    overflow-x: auto;
   }
   .tabs button {
     padding: 10px 12px;
-    flex: 1;
+    flex: 1 0 auto;
+    white-space: nowrap;
   }
   .actions button {
     flex: 1 1 auto;
   }
-  .run-heading {
-    gap: 12px;
-  }
-  .run-heading button {
-    font-size: 12px;
-    padding: 10px;
-  }
   .resume {
     justify-content: start;
+  }
+}
+@media (min-width: 1500px) {
+  main {
+    padding: 48px max(60px, env(safe-area-inset-right)) 48px
+      max(60px, env(safe-area-inset-left));
+  }
+}
+@media (max-width: 480px) {
+  :root {
+    --topbar-h: 60px;
+    --pad-x: 14px;
+  }
+  .brand {
+    font-size: 26px;
+    letter-spacing: -1.5px;
+  }
+  .brand-label {
+    display: none;
+  }
+  #connection {
+    font-size: 11px;
+  }
+  main {
+    padding: 16px max(14px, env(safe-area-inset-right))
+      max(32px, env(safe-area-inset-bottom))
+      max(14px, env(safe-area-inset-left));
+  }
+  .panel {
+    padding: 16px;
+  }
+  .run-heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .run-heading > div {
+    width: 100%;
+  }
+  .form-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .form-actions .primary {
+    width: 100%;
+  }
+  .actions {
+    flex-direction: column;
+  }
+  .actions button {
+    width: 100%;
+  }
+  #error {
+    margin: 12px 14px;
+  }
+}
+@media (max-width: 380px) {
+  .sidebar-toggle-label {
+    display: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+  .pipeline li,
+  .pipeline li::after,
+  .stage-dot,
+  .stage-dot::after {
+    animation: none !important;
+  }
+  .pipeline li[data-state="active"] .stage-bar::after {
+    animation: none !important;
+    width: auto;
+    transform: scaleX(0.5);
   }
 }

@@ -114,7 +114,9 @@ diffs, and lets you approve or reject decisions, request fixes, select a fallbac
 agent, retry a failed step, and choose to commit, commit and push, or leave changes
 staged. Autopilot is available when starting a run. It uses the same agent/model
 configuration as the terminal dashboard. Saved runs for this repository can be
-inspected and resumed from Plan, Execute or Review.
+inspected and resumed from Plan, Execute or Review. On a phone the run history,
+worktrees and workspace details sit behind the **Runs** button in the header;
+the badge turns green when a run is waiting for your input.
 
 Expand **Base prompts · Plan, Execute, Review** before starting a run to view or
 edit each step’s base instructions. Each step has a reset button to restore its
@@ -154,7 +156,10 @@ These values are preselected in the dashboard's model picker.
 
 Any of them can plan, including `opencode` and `antigravity`. Planning is
 read-only: OpenCode plans with its built-in `plan` agent unless the planner's
-`subagent` names another, and Antigravity runs in `--mode plan`.
+`subagent` names another, and Antigravity runs in `--mode plan`. Plan mode
+blocks shell commands, which ends an agy session; kor then continues the same
+conversation, keeping what it already read, and asks for the result without
+commands (up to twice).
 
 Every run saves its approved plan as `plan.md` in the run directory (shown by
 `kor status <run-id>`), in the same format `@plan.md` accepts. The executor and
