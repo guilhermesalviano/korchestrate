@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/guilhermesalviano/korchestrate/internal/agent"
 	"github.com/guilhermesalviano/korchestrate/internal/artifact"
@@ -60,7 +61,9 @@ func (p *Pipeline) plan(ctx context.Context) (*contracts.Plan, error) {
 	var lastErr error
 	for attempt := 1; attempt <= 2; attempt++ {
 		spec := p.Cfg.Models.Planner
+		started := time.Now()
 		res, err := p.runStage(ctx, agent.Planner, func(a agent.Agent, model string) (*agent.Result, error) {
+			p.logStageStart(agent.Planner, a.Name(), model, 0)
 			return a.Run(ctx, agent.Request{
 				Role:         agent.Planner,
 				Dir:          p.worktreePath,
@@ -79,26 +82,31 @@ func (p *Pipeline) plan(ctx context.Context) (*contracts.Plan, error) {
 		writeEvents(p.Run, "planner.events.jsonl", res)
 		p.addUsage(res)
 		if err != nil {
+			p.logStageEnd(agent.Planner, 0, started, res, err)
 			lastErr = err
 			correction = "\n\n(Your previous attempt failed; return ONLY valid JSON matching the schema.)"
 			continue
 		}
 		if len(res.Structured) == 0 {
 			lastErr = errors.New("planner returned no structured output")
+			p.logStageRetry(agent.Planner, 0, lastErr.Error())
 			correction = "\n\n(You did not return JSON. Return ONLY the JSON object matching the schema.)"
 			continue
 		}
 		var plan contracts.Plan
 		if err := contracts.DecodeObject(res.Structured, &plan); err != nil {
 			lastErr = fmt.Errorf("decode plan: %w", err)
+			p.logStageRetry(agent.Planner, 0, lastErr.Error())
 			correction = fmt.Sprintf("\n\n(Your JSON was invalid: %v. Return corrected JSON only.)", err)
 			continue
 		}
 		if err := plan.Validate(); err != nil {
 			lastErr = fmt.Errorf("invalid plan: %w", err)
+			p.logStageRetry(agent.Planner, 0, lastErr.Error())
 			correction = fmt.Sprintf("\n\n(Your plan was invalid: %v. Return corrected JSON only.)", err)
 			continue
 		}
+		p.logStageEnd(agent.Planner, 0, started, res, nil)
 		return &plan, nil
 	}
 	return nil, fmt.Errorf("planner failed: %w", lastErr)
@@ -118,7 +126,9 @@ func (p *Pipeline) execute(ctx context.Context, plan *contracts.Plan, iter int, 
 	outFile := p.Run.Path(fmt.Sprintf("executor.last.%d.txt", iter))
 
 	spec := p.Cfg.Models.Executor
+	started := time.Now()
 	res, err := p.runStage(ctx, agent.Executor, func(a agent.Agent, model string) (*agent.Result, error) {
+		p.logStageStart(agent.Executor, a.Name(), model, iter)
 		return a.Run(ctx, agent.Request{
 			Role:         agent.Executor,
 			Dir:          p.worktreePath,
@@ -139,17 +149,23 @@ func (p *Pipeline) execute(ctx context.Context, plan *contracts.Plan, iter int, 
 	writeEvents(p.Run, fmt.Sprintf("executor.events.%d.jsonl", iter), res)
 	p.addUsage(res)
 	if err != nil {
+		p.logStageEnd(agent.Executor, iter, started, res, err)
 		return nil, err
 	}
+	var report *contracts.ExecReport
 	if len(res.Structured) == 0 {
-		return nil, nil
+		p.logf(artifact.LevelWarn, "executor", "executor.no_report", "executor returned no structured report")
+	} else {
+		var decoded contracts.ExecReport
+		if derr := contracts.DecodeObject(res.Structured, &decoded); derr != nil {
+			p.Gate.Info("warning: could not decode executor report: " + derr.Error())
+			p.logf(artifact.LevelWarn, "executor", "executor.report_invalid", "could not decode executor report: %v", derr)
+		} else {
+			report = &decoded
+		}
 	}
-	var report contracts.ExecReport
-	if err := contracts.DecodeObject(res.Structured, &report); err != nil {
-		p.Gate.Info("warning: could not decode executor report: " + err.Error())
-		return nil, nil
-	}
-	return &report, nil
+	p.logStageEnd(agent.Executor, iter, started, res, nil)
+	return report, nil
 }
 
 // review runs the reviewer with one validation retry per agent. Adapter
@@ -167,6 +183,7 @@ func (p *Pipeline) review(ctx context.Context, plan *contracts.Plan, diff string
 	}
 	base := renderReviewer(p.Opts.Prompt, plan, diff, report)
 
+	started := time.Now()
 	res, err := p.runStage(ctx, agent.Reviewer, func(a agent.Agent, model string) (*agent.Result, error) {
 		var correction string
 		var lastErr error
@@ -174,6 +191,7 @@ func (p *Pipeline) review(ctx context.Context, plan *contracts.Plan, diff string
 			spec := p.Cfg.Models.Reviewer
 			tag := fmt.Sprintf("%d.%d.%s", iter, attempt, a.Name())
 			outFile := p.Run.Path("reviewer.last." + tag + ".txt")
+			p.logStageStart(agent.Reviewer, a.Name(), model, iter)
 			res, err := a.Run(ctx, agent.Request{
 				Role:         agent.Reviewer,
 				Dir:          p.worktreePath,
@@ -201,17 +219,20 @@ func (p *Pipeline) review(ctx context.Context, plan *contracts.Plan, diff string
 			}
 			if len(res.Structured) == 0 {
 				lastErr = errors.New("reviewer returned no structured output")
+				p.logStageRetry(agent.Reviewer, iter, lastErr.Error())
 				correction = "\n\n(You did not return JSON. Return ONLY the JSON verdict object.)"
 				continue
 			}
 			var review contracts.Review
 			if err := contracts.DecodeObject(res.Structured, &review); err != nil {
 				lastErr = fmt.Errorf("decode review: %w", err)
+				p.logStageRetry(agent.Reviewer, iter, lastErr.Error())
 				correction = fmt.Sprintf("\n\n(Your JSON was invalid: %v. Return corrected JSON only.)", err)
 				continue
 			}
 			if err := review.Validate(); err != nil {
 				lastErr = fmt.Errorf("invalid review: %w", err)
+				p.logStageRetry(agent.Reviewer, iter, lastErr.Error())
 				correction = fmt.Sprintf("\n\n(Your review was invalid: %v. Return corrected JSON only, with a top-level \"verdict\" of pass or fail.)", err)
 				continue
 			}
@@ -220,12 +241,15 @@ func (p *Pipeline) review(ctx context.Context, plan *contracts.Plan, diff string
 		return nil, fmt.Errorf("reviewer failed: %w", lastErr)
 	})
 	if err != nil {
+		p.logStageEnd(agent.Reviewer, iter, started, res, err)
 		return nil, err
 	}
 	var review contracts.Review
 	if err := contracts.DecodeObject(res.Structured, &review); err != nil {
+		p.logStageEnd(agent.Reviewer, iter, started, res, nil)
 		return nil, fmt.Errorf("reviewer failed: decode review: %w", err)
 	}
+	p.logStageEnd(agent.Reviewer, iter, started, res, nil)
 	return &review, nil
 }
 

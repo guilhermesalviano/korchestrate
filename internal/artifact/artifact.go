@@ -45,6 +45,19 @@ func (u *Usage) Add(in, out int, cost float64) {
 	u.CostUSD += cost
 }
 
+// RunError is one failure recorded during a run, kept as an append-only
+// history: fallbacks, retries and failed pushes are worth auditing even when
+// the run eventually succeeded. Error always holds the most recent fatal one.
+type RunError struct {
+	At      time.Time `json:"at"`
+	Stage   string    `json:"stage,omitempty"`
+	Agent   string    `json:"agent,omitempty"`
+	Message string    `json:"message"`
+}
+
+// maxRunErrors bounds the persisted history, keeping the newest entries.
+const maxRunErrors = 100
+
 // Run is the persisted record of one orchestrator run.
 type Run struct {
 	ID       string `json:"id"`
@@ -56,16 +69,17 @@ type Run struct {
 	// deleted worktree on retry.
 	Base string `json:"base,omitempty"`
 	// InPlace runs use the user's checkout; cleanup must never remove it.
-	InPlace   bool      `json:"in_place,omitempty"`
-	Dir       string    `json:"dir"`
-	State     State     `json:"state"`
-	Iteration int       `json:"iteration"`
-	Commit    string    `json:"commit,omitempty"`
-	Pushed    bool      `json:"pushed,omitempty"`
-	Error     string    `json:"error,omitempty"`
-	Usage     Usage     `json:"usage"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	InPlace   bool       `json:"in_place,omitempty"`
+	Dir       string     `json:"dir"`
+	State     State      `json:"state"`
+	Iteration int        `json:"iteration"`
+	Commit    string     `json:"commit,omitempty"`
+	Pushed    bool       `json:"pushed,omitempty"`
+	Error     string     `json:"error,omitempty"`
+	Errors    []RunError `json:"errors,omitempty"`
+	Usage     Usage      `json:"usage"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 
 	// Autopilot runs skip every gate, then commit, push and open a PR.
 	Autopilot bool   `json:"autopilot,omitempty"`
@@ -130,17 +144,46 @@ func (r *Run) Write(name string, data []byte) error {
 // Read reads a named artifact.
 func (r *Run) Read(name string) ([]byte, error) { return os.ReadFile(r.Path(name)) }
 
-// SetState updates and persists the run state.
+// SetState updates and persists the run state, recording the transition in
+// the run's audit timeline.
 func (r *Run) SetState(s State) error {
 	r.State = s
+	if err := r.Save(); err != nil {
+		return err
+	}
+	_ = r.Log(LogEntry{Level: LevelInfo, Stage: "run", Event: "state", Message: string(s)})
+	return nil
+}
+
+// AddError appends a failure to the run's error history and timeline, and
+// persists it. Use it for failures the run survives (an agent falling back,
+// a failed push); Fail records the fatal one. Consecutive duplicates (the
+// same failure logged again by the final handler) are collapsed.
+func (r *Run) AddError(stage, agentName string, err error) error {
+	if r == nil || err == nil {
+		return nil
+	}
+	msg := err.Error()
+	e := RunError{At: time.Now(), Stage: stage, Agent: agentName, Message: msg}
+	if n := len(r.Errors); n > 0 && r.Errors[n-1].Message == msg {
+		return nil
+	}
+	r.Errors = append(r.Errors, e)
+	if len(r.Errors) > maxRunErrors {
+		r.Errors = r.Errors[len(r.Errors)-maxRunErrors:]
+	}
+	_ = r.Log(LogEntry{Level: LevelError, Stage: stage, Agent: agentName, Event: "error", Message: msg})
 	return r.Save()
 }
 
-// Fail marks the run failed with a message.
+// Fail marks the run failed with a message, adding it to the error history.
 func (r *Run) Fail(err error) error {
 	r.State = StateFailed
 	if err != nil {
 		r.Error = err.Error()
+		if rerr := r.AddError("", "", err); rerr != nil {
+			return rerr
+		}
 	}
 	return r.Save()
 }

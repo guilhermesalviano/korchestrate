@@ -48,6 +48,7 @@ func newRootCmd() *cobra.Command {
 		newResumeCmd(&configPath, &artifactsDir),
 		newListCmd(&artifactsDir),
 		newStatusCmd(&artifactsDir),
+		newLogsCmd(&artifactsDir),
 		newCleanCmd(&artifactsDir),
 		newDoctorCmd(&configPath, &repo),
 		newVersionCmd(),

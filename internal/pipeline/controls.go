@@ -33,6 +33,7 @@ func retryStep[T any](ctx context.Context, p *Pipeline, step string, fn func() (
 			return value, err
 		}
 		p.Gate.Info("retrying " + step)
+		p.logf(artifact.LevelInfo, step, "step.retry", "retrying %s", step)
 	}
 }
 
@@ -82,13 +83,18 @@ func publishRun(run *artifact.Run) error {
 	}
 	if commit != "" {
 		run.Commit, run.Pushed = commit, false
+		_ = run.Log(artifact.LogEntry{Level: artifact.LevelInfo, Stage: "commit", Event: "commit.done",
+			Message: "committed " + shortSHA(commit) + " on " + run.Branch})
 	}
 	if err := run.Save(); err != nil {
 		return err
 	}
 	if err := worktree.Push(run.Worktree, run.Branch); err != nil {
+		_ = run.AddError("push", "", err)
 		return fmt.Errorf("commit kept on %s; push failed (press p to retry): %w", run.Branch, err)
 	}
 	run.Pushed = true
+	_ = run.Log(artifact.LogEntry{Level: artifact.LevelInfo, Stage: "push", Event: "push.done",
+		Message: "pushed " + run.Branch + " to origin"})
 	return run.Save()
 }

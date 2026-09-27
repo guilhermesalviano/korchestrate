@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -13,7 +15,8 @@ import (
 )
 
 func newListCmd(artifactsDir *string) *cobra.Command {
-	return &cobra.Command{
+	var failed bool
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "list runs",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -21,21 +24,54 @@ func newListCmd(artifactsDir *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if failed {
+				kept := runs[:0]
+				for _, r := range runs {
+					if r.State == artifact.StateFailed || r.State == artifact.StateAborted {
+						kept = append(kept, r)
+					}
+				}
+				runs = kept
+			}
 			if len(runs) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "no runs")
+				if failed {
+					fmt.Fprintln(cmd.OutOrStdout(), "no failed or aborted runs")
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "no runs")
+				}
 				return nil
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tSTATE\tITER\tCREATED\tPROMPT")
+			fmt.Fprintln(w, "ID\tSTATE\tITER\tCREATED\tERROR\tPROMPT")
 			for _, r := range runs {
-				fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n",
+				fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\n",
 					r.ID, r.State, r.Iteration,
 					r.CreatedAt.Format("2006-01-02 15:04"),
+					truncate(errorSummary(r), 40),
 					truncate(r.Prompt, 50))
 			}
 			return w.Flush()
 		},
 	}
+	cmd.Flags().BoolVar(&failed, "failed", false, "show only failed or aborted runs")
+	return cmd
+}
+
+// errorSummary is the run's most recent error, or "-" when it has none.
+func errorSummary(r *artifact.Run) string {
+	switch {
+	case len(r.Errors) > 0:
+		return firstLineOf(r.Errors[len(r.Errors)-1].Message)
+	case r.Error != "":
+		return firstLineOf(r.Error)
+	}
+	return "-"
+}
+
+// firstLineOf collapses multi-line errors to their first line.
+func firstLineOf(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(line)
 }
 
 func newStatusCmd(artifactsDir *string) *cobra.Command {
@@ -60,10 +96,25 @@ func newStatusCmd(artifactsDir *string) *cobra.Command {
 			fmt.Fprintf(out, "created:   %s\n", r.CreatedAt.Format("2006-01-02 15:04:05"))
 			fmt.Fprintf(out, "usage:     in=%d out=%d cost=$%.4f\n",
 				r.Usage.InputTokens, r.Usage.OutputTokens, r.Usage.CostUSD)
-			if r.Error != "" {
+			if len(r.Errors) == 0 && r.Error != "" {
 				fmt.Fprintf(out, "error:     %s\n", r.Error)
 			}
+			if len(r.Errors) > 0 {
+				fmt.Fprintf(out, "errors:    %d\n", len(r.Errors))
+				for _, e := range r.Errors {
+					stage := e.Stage
+					if stage == "" {
+						stage = "run"
+					}
+					fmt.Fprintf(out, "  %s  %-9s %s\n",
+						e.At.Format("2006-01-02 15:04:05"), stage, firstLineOf(e.Message))
+				}
+			}
 			fmt.Fprintf(out, "prompt:    %s\n", r.Prompt)
+			if _, err := os.Stat(r.Path(artifact.LogFile)); err == nil {
+				fmt.Fprintf(out, "log:       %s\n", r.Path(artifact.LogFile))
+				fmt.Fprintf(out, "           kor logs %s --errors\n", r.ID)
+			}
 
 			if data, err := r.Read("review.json"); err == nil {
 				var v any

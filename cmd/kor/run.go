@@ -189,7 +189,11 @@ func runPlain(ctx context.Context, p *pipeline.Pipeline, yes bool) error {
 	}
 	p.Gate = gate
 	defer gate.Close()
-	return p.Execute(ctx)
+	err := p.Execute(ctx)
+	if err != nil && p.Run != nil {
+		fmt.Fprintf(os.Stderr, "kor: run %s did not finish; see kor logs %s --errors\n", p.Run.ID, p.Run.ID)
+	}
+	return err
 }
 
 // launchDashboard opens the interactive dashboard. template supplies the per-run

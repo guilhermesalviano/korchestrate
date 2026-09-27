@@ -70,6 +70,11 @@ type Pipeline struct {
 
 	// overrides remembers adapters the user selected after a stage failure.
 	overrides map[agent.Kind]agentChoice
+
+	// stage tracking feeds the audit timeline and failure attribution.
+	stage      string
+	stageAgent string
+	stageModel string
 }
 
 func (p *Pipeline) agentFor(name string) (agent.Agent, error) {
@@ -169,6 +174,23 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 		_ = run.Write("config.resolved.yaml", cfgYAML)
 	}
 	p.Gate.Info("run " + run.ID + " -> " + run.Dir)
+	p.logf(artifact.LevelInfo, "run", "run.start",
+		"run %s started · repo=%s · branch=%s · worktree=%s · autopilot=%t",
+		run.ID, run.Repo, p.branch, p.worktreePath, p.Opts.Autopilot)
+	if first := firstLine(p.Opts.Prompt); first != "" {
+		p.logf(artifact.LevelInfo, "run", "run.prompt", "prompt: %.200s", first)
+	}
+	for _, c := range checks {
+		level, msg := artifact.LevelInfo, "ok"
+		switch {
+		case c.Fatal:
+			level, msg = artifact.LevelError, "FAIL"
+		case !c.OK:
+			level, msg = artifact.LevelWarn, "warn"
+		}
+		p.logf(level, "preflight", "preflight.check", "%s %s: %s", msg, c.Name, c.Detail)
+	}
+	p.markStage("worktree", "", "")
 	p.notify()
 
 	var unlock func()
@@ -181,9 +203,13 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 			// instead of collapsing it into a generic failure.
 			if run.State == artifact.StateAborted {
 				run.Error = err.Error()
+				_ = run.AddError(p.stage, p.stageAgent, err)
 				_ = run.Save()
+				p.logf(artifact.LevelWarn, "run", "run.aborted", "%v", err)
 			} else {
+				_ = run.AddError(p.stage, p.stageAgent, err)
 				_ = run.Fail(err)
+				p.logf(artifact.LevelError, "run", "run.failed", "%v", err)
 				// The work done so far is what a retry resumes from.
 				p.Opts.KeepWorktree = true
 			}
@@ -197,6 +223,7 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 				return err
 			}
 			p.Gate.Info("using current checkout " + p.worktreePath + " on " + p.branch)
+			p.logf(artifact.LevelInfo, "worktree", "worktree.in_place", "using current checkout %s on %s", p.worktreePath, p.branch)
 		} else if p.reused {
 			// The user chose to keep the existing worktree/branch: adopt it
 			// where it lives instead of creating a fresh one.
@@ -209,6 +236,7 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 				return err
 			}
 			p.Gate.Info("reusing worktree " + p.worktreePath + " on " + p.branch)
+			p.logf(artifact.LevelInfo, "worktree", "worktree.reuse", "reusing worktree %s on %s", p.worktreePath, p.branch)
 		} else {
 			if worktree.BranchExists(p.Opts.Repo, p.branch) {
 				return fmt.Errorf("branch %q already exists; choose another worktree name", p.branch)
@@ -225,6 +253,7 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 				return err
 			}
 			p.Gate.Info("worktree " + p.worktreePath + " on " + p.branch)
+			p.logf(artifact.LevelInfo, "worktree", "worktree.create", "created worktree %s on %s from %s", p.worktreePath, p.branch, shortSHA(base))
 		}
 	}
 	if !created && !run.InPlace {
@@ -258,15 +287,18 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 		}
 		if edited {
 			p.Gate.Info("using your edited plan.md")
+			p.logf(artifact.LevelInfo, "planner", "plan.edited", "using your edited plan.md")
 		}
 		p.Opts.Plan = saved
 	}
 	if resumed {
 		plan = p.Opts.Plan
 		p.Gate.Info("resuming at " + string(p.Opts.From) + " with the recorded plan")
+		p.logf(artifact.LevelInfo, "run", "run.resume", "resuming at %s with the recorded plan", p.Opts.From)
 	} else if p.Opts.Plan != nil {
 		plan = p.Opts.Plan
 		p.Gate.Info("using provided plan; skipping planner")
+		p.logf(artifact.LevelInfo, "planner", "plan.provided", "using provided plan; skipping planner")
 	} else {
 		plan, err = retryStep(ctx, p, "planner", func() (*contracts.Plan, error) { return p.plan(ctx) })
 		if err != nil {
@@ -278,11 +310,13 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 	_ = run.Write("plan.json", planJSON)
 	// plan.md is the executor's copy; editing it before a resume changes the plan.
 	_ = run.Write("plan.md", []byte(plan.Markdown()))
+	p.logf(artifact.LevelInfo, "planner", "plan.saved", "plan saved with %d step(s)", len(plan.Steps))
 	if err := run.SetState(artifact.StateGatePlan); err != nil {
 		return err
 	}
 	if p.Cfg.Gates.AfterPlan && !resumed && p.Opts.Autopilot {
 		p.Gate.Info("autopilot: plan approved")
+		p.logf(artifact.LevelInfo, "planner", "gate.plan", "approved by autopilot")
 	} else if p.Cfg.Gates.AfterPlan && !resumed {
 		p.Gate.Stage(agent.Planner, "awaiting plan approval")
 		decision, gerr := p.Gate.PlanGate(ctx, plan, "")
@@ -290,10 +324,12 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 			return gerr
 		}
 		if decision == ui.Reject {
+			p.logf(artifact.LevelWarn, "planner", "gate.plan", "rejected by user")
 			run.State = artifact.StateAborted
 			_ = run.Save()
 			return fmt.Errorf("plan rejected by user")
 		}
+		p.logf(artifact.LevelInfo, "planner", "gate.plan", "approved by user")
 	}
 
 	// --- EXECUTE / REVIEW LOOP -------------------------------------------
@@ -318,6 +354,7 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 		fix = nextFix
 		if iter >= p.Cfg.Loop.MaxIterations {
 			cause := fmt.Errorf("review did not pass within %d iteration(s)", iter+1)
+			p.logError("review", p.stageAgent, cause)
 			gate, ok := p.Gate.(retryGate)
 			if !ok || p.Opts.Autopilot {
 				return cause
@@ -329,6 +366,7 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 			if !again {
 				return cause
 			}
+			p.logf(artifact.LevelInfo, "review", "retry", "retrying review fixes after the iteration cap")
 		}
 	}
 
@@ -344,11 +382,15 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 	decision := ui.CommitAndPush
 	if p.Opts.Autopilot {
 		p.Gate.Info("autopilot: committing and pushing " + p.branch)
+		p.logf(artifact.LevelInfo, "publish", "commit.decision", "autopilot: commit and push %s", p.branch)
 	} else if decision, err = p.Gate.CommitGate(ctx, p.branch, p.worktreePath); err != nil {
 		return err
+	} else {
+		p.logf(artifact.LevelInfo, "publish", "commit.decision", "user chose %s on %s", decision, p.branch)
 	}
 	if decision == ui.CommitStop {
 		p.Gate.Info("leaving remaining changes staged on " + p.branch)
+		p.logf(artifact.LevelInfo, "publish", "commit.stop", "leaving changes staged on %s", p.branch)
 		if err := run.SetState(artifact.StateDone); err != nil {
 			return err
 		}
@@ -358,8 +400,10 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 	if err := run.SetState(artifact.StateCommitting); err != nil {
 		return err
 	}
+	p.markStage("commit", "", "")
 	diff, _ := worktree.Snapshot(p.worktreePath)
 	p.Gate.Info("drafting commit message with opencode")
+	p.logf(artifact.LevelInfo, "commit", "commit.draft", "drafting commit message with opencode")
 	message := commitMessage(ctx, commitSpec(p.Cfg), p.worktreePath, p.Opts.Prompt, diff, plan.Summary, run.ID)
 	commit, err := retryStep(ctx, p, "commit", func() (string, error) {
 		return worktree.Commit(p.worktreePath, message)
@@ -369,6 +413,7 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 	}
 	if commit != "" {
 		run.Commit, run.Pushed = commit, false
+		p.logf(artifact.LevelInfo, "commit", "commit.done", "committed %s on %s", shortSHA(commit), p.branch)
 	}
 	p.Opts.KeepWorktree = true
 	if err := run.Save(); err != nil {
@@ -377,28 +422,35 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 	if decision == ui.CommitAndPush {
 		// A failed push must not be treated as a failed run: that would tear
 		// down the worktree and discard the commit that just succeeded.
+		p.markStage("push", "", "")
 		if _, err := retryStep(ctx, p, "push", func() (bool, error) {
 			return true, worktree.Push(p.worktreePath, p.branch)
 		}); err != nil {
 			p.Gate.Info("warning: push failed: " + err.Error())
 			p.Gate.Info("commit is safe on " + p.branch + "; press p in the dashboard to retry")
+			p.logError("push", "", err)
 		} else {
 			run.Pushed = true
 			p.Gate.Info("pushed " + p.branch + " to origin")
+			p.logf(artifact.LevelInfo, "push", "push.done", "pushed %s to origin", p.branch)
 		}
 	}
 	// A pull request needs a branch of its own; changes made directly on the
 	// default branch are pushed but never proposed as a PR.
 	if p.Opts.Autopilot && run.Pushed && !worktree.SeparateBranch(p.worktreePath, p.branch) {
 		p.Gate.Info("autopilot: not opening a pull request: " + p.branch + " is the default branch; name a separate branch to get one")
+		p.logf(artifact.LevelInfo, "pr", "pr.skip", "%s is the default branch; no pull request opened", p.branch)
 	} else if p.Opts.Autopilot && run.Pushed {
 		p.Gate.Info("autopilot: opening a pull request")
+		p.markStage("pr", "", "")
 		url, err := openPR(ctx, p.worktreePath, p.branch, prTitle(message), prBody(run, plan))
 		if err != nil {
 			p.Gate.Info("warning: could not open a pull request: " + err.Error())
+			p.logError("pr", "", err)
 		} else {
 			run.PR = url
 			p.Gate.Info("pull request " + url)
+			p.logf(artifact.LevelInfo, "pr", "pr.opened", "pull request %s", url)
 		}
 	}
 	if err := run.SetState(artifact.StateDone); err != nil {
@@ -406,6 +458,7 @@ func (p *Pipeline) Execute(ctx context.Context) (err error) {
 	}
 	p.Gate.Info("done; branch " + p.branch + " at " + shortSHA(run.Commit))
 	p.Gate.Info("worktree retained at " + p.worktreePath)
+	p.logf(artifact.LevelInfo, "run", "run.done", "branch %s at %s", p.branch, shortSHA(run.Commit))
 	if p.Opts.Autopilot {
 		p.Gate.Info(EndMessage(run))
 	}
@@ -449,6 +502,7 @@ func (p *Pipeline) cycle(ctx context.Context, plan *contracts.Plan, iter int, fi
 	_ = p.Run.Write("diff.patch", []byte(diff))
 	if strings.TrimSpace(diff) == "" {
 		p.Gate.Info("executor produced no changes")
+		p.logf(artifact.LevelWarn, "executor", "executor.no_changes", "executor produced no changes")
 	}
 	p.Gate.Info("executor changes staged on " + p.branch)
 	p.processControls()
@@ -461,6 +515,12 @@ func (p *Pipeline) cycle(ctx context.Context, plan *contracts.Plan, iter int, fi
 	data, _ := json.MarshalIndent(review, "", "  ")
 	_ = p.Run.Write(fmt.Sprintf("review.%d.json", iter), data)
 	_ = p.Run.Write("review.json", data)
+	verdict := "failed"
+	level := artifact.LevelWarn
+	if review.Pass() {
+		verdict, level = "passed", artifact.LevelInfo
+	}
+	p.logf(level, "reviewer", "review.verdict", "review %s: %d issue(s)", verdict, len(review.Issues))
 	if err := p.Run.SetState(artifact.StateGateReview); err != nil {
 		return false, "", err
 	}
@@ -474,12 +534,15 @@ func (p *Pipeline) cycle(ctx context.Context, plan *contracts.Plan, iter int, fi
 			}
 			switch decision {
 			case ui.Reject:
+				p.logf(artifact.LevelWarn, "reviewer", "gate.review", "review rejected by user")
 				p.Run.State = artifact.StateAborted
 				_ = p.Run.Save()
 				return false, "", fmt.Errorf("review rejected by user")
 			case ui.Fix:
+				p.logf(artifact.LevelInfo, "reviewer", "gate.review", "user requested fixes")
 				return false, p.fixInstruction(review), nil
 			}
+			p.logf(artifact.LevelInfo, "reviewer", "gate.review", "review accepted by user")
 		}
 		return true, "", nil
 	}
@@ -487,16 +550,19 @@ func (p *Pipeline) cycle(ctx context.Context, plan *contracts.Plan, iter int, fi
 	p.Gate.Stage(agent.Reviewer, "review failed")
 	if p.Opts.Autopilot {
 		p.Gate.Info("autopilot: sending the review issues back to the executor")
+		p.logf(artifact.LevelInfo, "reviewer", "gate.review", "autopilot: sending review issues to the executor")
 	} else if p.Cfg.Gates.AfterReview {
 		decision, err := p.Gate.ReviewGate(ctx, review, diff)
 		if err != nil {
 			return false, "", err
 		}
 		if decision == ui.Reject {
+			p.logf(artifact.LevelWarn, "reviewer", "gate.review", "review rejected by user")
 			p.Run.State = artifact.StateAborted
 			_ = p.Run.Save()
 			return false, "", fmt.Errorf("review rejected by user")
 		}
+		p.logf(artifact.LevelInfo, "reviewer", "gate.review", "user requested fixes")
 	}
 	return false, p.fixInstruction(review), nil
 }
@@ -553,6 +619,7 @@ func (p *Pipeline) rebuildWorktree() error {
 		return nil
 	}
 	p.Gate.Info("worktree " + p.worktreePath + " is gone; rebuilding it")
+	p.logf(artifact.LevelWarn, "worktree", "worktree.rebuild", "worktree %s is gone; rebuilding it", p.worktreePath)
 	_ = worktree.Prune(p.Opts.Repo)
 	if wt := worktree.ForBranch(p.Opts.Repo, p.branch); wt != "" {
 		return fmt.Errorf("branch %q is checked out at %s; remove that worktree before retrying", p.branch, wt)
@@ -575,6 +642,7 @@ func (p *Pipeline) rebuildWorktree() error {
 		return fmt.Errorf("rebuilt the worktree but could not restore its changes: %w", err)
 	}
 	p.Gate.Info("restored the recorded changes from diff.patch")
+	p.logf(artifact.LevelInfo, "worktree", "worktree.restore", "restored the recorded changes from diff.patch")
 	return nil
 }
 
@@ -584,6 +652,7 @@ func (p *Pipeline) rebuildWorktree() error {
 func (p *Pipeline) cleanup() {
 	if p.Run != nil && p.Run.InPlace {
 		p.Gate.Info("keeping current checkout " + p.worktreePath + " (branch " + p.branch + ")")
+		p.logf(artifact.LevelInfo, "worktree", "worktree.keep", "keeping current checkout %s on %s", p.worktreePath, p.branch)
 		return
 	}
 	if p.worktreePath == "" || p.branch == "" {
@@ -591,15 +660,18 @@ func (p *Pipeline) cleanup() {
 	}
 	if p.reused {
 		p.Gate.Info("keeping reused worktree " + p.worktreePath + " (branch " + p.branch + ")")
+		p.logf(artifact.LevelInfo, "worktree", "worktree.keep", "keeping reused worktree %s on %s", p.worktreePath, p.branch)
 		return
 	}
 	if p.Opts.KeepWorktree {
 		p.Gate.Info("keeping worktree " + p.worktreePath + " (branch " + p.branch + ")")
+		p.logf(artifact.LevelInfo, "worktree", "worktree.keep", "keeping worktree %s on %s", p.worktreePath, p.branch)
 		return
 	}
 	if err := worktree.Remove(p.Opts.Repo, p.worktreePath); err == nil {
 		_ = worktree.DeleteBranch(p.Opts.Repo, p.branch)
 		p.Gate.Info("removed worktree and branch " + p.branch)
+		p.logf(artifact.LevelInfo, "worktree", "worktree.remove", "removed worktree and branch %s", p.branch)
 	}
 }
 

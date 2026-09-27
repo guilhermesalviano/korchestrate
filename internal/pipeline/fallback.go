@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/guilhermesalviano/korchestrate/internal/agent"
+	"github.com/guilhermesalviano/korchestrate/internal/artifact"
 	"github.com/guilhermesalviano/korchestrate/internal/config"
 )
 
@@ -59,6 +60,7 @@ func (p *Pipeline) runStage(ctx context.Context, kind agent.Kind, build func(a a
 			return res, err
 		}
 		p.Gate.Info(fmt.Sprintf("%s agent %q failed: %v", kind, a.Name(), err))
+		p.logError(string(kind), a.Name(), err)
 		next, ok, ferr := p.pickFallback(ctx, kind, a.Name(), preferred, tried, err)
 		if ferr != nil {
 			return res, ferr
@@ -67,6 +69,7 @@ func (p *Pipeline) runStage(ctx context.Context, kind agent.Kind, build func(a a
 			return res, err
 		}
 		p.Gate.Info(fmt.Sprintf("retrying %s with %s (%s)", kind, next.agent.Name(), next.model))
+		p.logf(artifact.LevelWarn, string(kind), "agent.fallback", "retrying %s with %s (%s)", kind, next.agent.Name(), next.model)
 		if p.overrides == nil {
 			p.overrides = map[agent.Kind]agentChoice{}
 		}

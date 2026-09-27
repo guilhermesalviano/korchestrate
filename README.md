@@ -79,10 +79,37 @@ retry that step without restarting earlier stages, or choose another agent.
 | `kor` / `kor dashboard` | open the TUI dashboard |
 | `kor web` | open a browser dashboard, accessible from a phone on the same LAN |
 | `kor resume` | resume a previous run |
-| `kor list` | list runs |
-| `kor status` | show status of a run |
+| `kor list` | list runs (`--failed` for failed and aborted runs with their error) |
+| `kor status` | show status of a run, including its error history |
+| `kor logs` | show a run's audit timeline (`--errors`, `--json`, `--follow`) |
 | `kor clean` | remove worktrees and artifacts |
 | `kor doctor` | check agents, config and repo health |
+
+## Logs and errors
+
+Every run keeps an append-only audit timeline at `run.log.jsonl` in its run
+directory: timestamped entries for worktree setup, every plan/execute/review
+attempt (agent, model, duration, exit code, tokens and cost), plan and review
+decisions, retries, fallbacks, commit, push and pull request results.
+
+```sh
+kor logs <run-id>            # the whole timeline
+kor logs <run-id> --errors   # only warnings and errors, recovered ones included
+kor logs <run-id> --json     # raw JSONL, ready for jq
+kor logs <run-id> --follow   # keep printing until the run finishes
+```
+
+A fallback agent or a failed push is an error even when the run later
+succeeds, so those are recorded too. `kor status <run-id>` lists the run's
+error history and points at the log file, and `kor list --failed` shows only
+failed or aborted runs with their latest error. When `kor run` fails, it ends
+by printing the exact `kor logs <id> --errors` command to run next.
+
+The raw agent output stays in the per-stage event files
+(`planner.events.jsonl`, `executor.events.<n>.jsonl`,
+`reviewer.events.<n>.<attempt>.<agent>.jsonl`); the timeline references the
+same stages, so an error there leads straight to the transcript. Runs created
+before this feature have no timeline file.
 
 ## Web dashboard / phone access
 
